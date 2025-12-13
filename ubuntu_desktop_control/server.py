@@ -1823,6 +1823,9 @@ def render_prompt_end_to_end_capture_and_act(
     )
 
 
-if __name__ == "__main__":
-    # Run the MCP server
+def main():
+    """Entry point for the MCP server."""
     mcp.run()
+
+if __name__ == "__main__":
+    main()

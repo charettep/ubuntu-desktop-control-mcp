@@ -22,6 +22,12 @@ An MCP (Model Context Protocol) server that enables LLMs to control your Ubuntu 
 
 ### 2. Installation
 
+#### From PyPI (Recommended)
+```bash
+pip install ubuntu-desktop-control
+```
+
+#### From Source
 ```bash
 # Clone repository
 git clone https://github.com/charettep/ubuntu-desktop-control-mcp.git
@@ -32,12 +38,7 @@ chmod +x install_system_deps.sh
 ./install_system_deps.sh
 
 # Install Python dependencies
-python3 -m venv .venv
-source .venv/bin/activate
 pip install -e .
-
-# Verify installation
-python3 test_server.py
 ```
 
 ## Configuration
@@ -49,8 +50,7 @@ python3 test_server.py
 #### Method 1: CLI (Recommended)
 ```bash
 claude mcp add --transport stdio ubuntu-desktop-control -- \
-  /path/to/ubuntu-desktop-control-mcp/.venv/bin/python3 \
-  /path/to/ubuntu-desktop-control-mcp/server.py
+  ubuntu-desktop-control
 ```
 
 #### Method 2: Manual Config
@@ -59,8 +59,8 @@ Edit `~/.claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "ubuntu-desktop-control": {
-      "command": "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3",
-      "args": ["/path/to/ubuntu-desktop-control-mcp/server.py"]
+      "command": "ubuntu-desktop-control",
+      "args": []
     }
   }
 }
@@ -83,8 +83,8 @@ Create `.vscode/mcp.json` in your workspace:
   "servers": {
     "ubuntu-desktop-control": {
       "type": "stdio",
-      "command": "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3",
-      "args": ["/path/to/ubuntu-desktop-control-mcp/server.py"]
+      "command": "ubuntu-desktop-control",
+      "args": []
     }
   }
 }
@@ -98,8 +98,7 @@ Create `.vscode/mcp.json` in your workspace:
 #### Method 1: CLI
 ```bash
 codex mcp add ubuntu-desktop-control -- \
-  /path/to/ubuntu-desktop-control-mcp/.venv/bin/python3 \
-  /path/to/ubuntu-desktop-control-mcp/server.py
+  ubuntu-desktop-control
 ```
 
 #### Method 2: Manual Config
@@ -107,8 +106,8 @@ Edit `~/.config/codex/config.toml`:
 ```toml
 [mcp_servers.ubuntu-desktop-control]
 type = "stdio"
-command = "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3"
-args = ["/path/to/ubuntu-desktop-control-mcp/server.py"]
+command = "ubuntu-desktop-control"
+args = []
 ```
 </details>
 
@@ -182,8 +181,8 @@ You can customize these variables in your MCP client configuration.
 {
   "mcpServers": {
     "ubuntu-desktop-control": {
-      "command": "/path/to/.../python3",
-      "args": ["/path/to/.../server.py"],
+      "command": "ubuntu-desktop-control",
+      "args": [],
       "env": {
         "DISPLAY": ":0",
         "XAUTHORITY": "/home/user/.Xauthority"
@@ -198,8 +197,8 @@ You can customize these variables in your MCP client configuration.
 {
   "servers": {
     "ubuntu-desktop-control": {
-      "command": "/path/to/.../python3",
-      "args": ["/path/to/.../server.py"],
+      "command": "ubuntu-desktop-control",
+      "args": [],
       "env": {
         "DISPLAY": ":0"
       }

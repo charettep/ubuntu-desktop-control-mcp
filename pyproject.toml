@@ -1,9 +1,25 @@
 [project]
-name = "ubuntu-desktop-control-mcp"
+name = "ubuntu-desktop-control"
 version = "0.1.0"
 description = "MCP server for Ubuntu desktop control via screenshots and mouse clicks"
 readme = "README.md"
 requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Patrick Charette", email = "charette.patrick@gmail.com" }
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: System :: Hardware :: Hardware Drivers",
+]
 dependencies = [
     "mcp>=1.0.0",
     "pyautogui>=0.9.54",
@@ -12,10 +28,19 @@ dependencies = [
     "mss>=9.0.1",
 ]
 
+[project.urls]
+Repository = "https://github.com/charettep/ubuntu-desktop-control-mcp"
+Issues = "https://github.com/charettep/ubuntu-desktop-control-mcp/issues"
+
+[project.scripts]
+ubuntu-desktop-control = "ubuntu_desktop_control.server:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
+    "build",
+    "twine",
 ]
 
 [build-system]
@@ -23,4 +48,5 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["."]
+packages = ["ubuntu_desktop_control"]
+
