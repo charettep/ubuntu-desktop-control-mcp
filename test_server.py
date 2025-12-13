@@ -17,6 +17,12 @@ except ImportError as e:
     sys.exit(1)
 
 try:
+    import mss
+    print("✓ mss imported successfully (fast screenshot backend)")
+except ImportError as e:
+    print(f"⚠ Failed to import mss: {e} (will fall back to slower PyAutoGUI)")
+
+try:
     from server import (
         take_screenshot, 
         click_screen, 
