@@ -50,7 +50,8 @@ sudo apt install -y python3-xlib scrot python3-tk python3-dev gnome-screenshot
 ### 1. Clone or Download
 
 ```bash
-cd /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp
+git clone https://github.com/yourusername/ubuntu-desktop-control-mcp.git
+cd ubuntu-desktop-control-mcp
 ```
 
 ### 2. Install Python Dependencies
@@ -100,8 +101,8 @@ Expected output:
 **Quick Install:**
 ```bash
 claude mcp add --transport stdio ubuntu-desktop-control -- \
-  /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/python3 \
-  /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py
+  /path/to/ubuntu-desktop-control-mcp/.venv/bin/python3 \
+  /path/to/ubuntu-desktop-control-mcp/server.py
 ```
 
 **Or** manually add to your `~/.claude/claude_desktop_config.json`:
@@ -110,9 +111,9 @@ claude mcp add --transport stdio ubuntu-desktop-control -- \
 {
   "mcpServers": {
     "ubuntu-desktop-control": {
-      "command": "/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/python3",
+      "command": "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3",
       "args": [
-        "/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py"
+        "/path/to/ubuntu-desktop-control-mcp/server.py"
       ]
     }
   }
@@ -124,7 +125,7 @@ claude mcp add --transport stdio ubuntu-desktop-control -- \
 Or use the automated installation:
 
 ```bash
-cd /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp
+cd ubuntu-desktop-control-mcp
 source .venv/bin/activate
 mcp install server.py --name "ubuntu-desktop-control"
 ```
@@ -133,7 +134,7 @@ mcp install server.py --name "ubuntu-desktop-control"
 
 **Quick Install:**
 ```bash
-code-insiders --add-mcp '{"ubuntu-desktop-control":{"command":"/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/python3","args":["/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py"]}}'
+code-insiders --add-mcp '{"ubuntu-desktop-control":{"command":"/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3","args":["/path/to/ubuntu-desktop-control-mcp/server.py"]}}'
 ```
 
 **Or** manually add to your VS Code settings (`.vscode/settings.json` or user settings):
@@ -142,9 +143,9 @@ code-insiders --add-mcp '{"ubuntu-desktop-control":{"command":"/home/p/1_Project
 {
   "mcp.servers": {
     "ubuntu-desktop-control": {
-      "command": "/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/python3",
+      "command": "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3",
       "args": [
-        "/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py"
+        "/path/to/ubuntu-desktop-control-mcp/server.py"
       ]
     }
   }
@@ -156,8 +157,8 @@ code-insiders --add-mcp '{"ubuntu-desktop-control":{"command":"/home/p/1_Project
 **Quick Install:**
 ```bash
 codex mcp add ubuntu-desktop-control -- \
-  /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/python3 \
-  /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py
+  /path/to/ubuntu-desktop-control-mcp/.venv/bin/python3 \
+  /path/to/ubuntu-desktop-control-mcp/server.py
 ```
 
 **Or** manually add to your Codex configuration file (`~/.config/codex/config.toml` or `config.json`):
@@ -166,9 +167,9 @@ codex mcp add ubuntu-desktop-control -- \
 {
   "mcpServers": {
     "ubuntu-desktop-control": {
-      "command": "/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/python3",
+      "command": "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3",
       "args": [
-        "/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py"
+        "/path/to/ubuntu-desktop-control-mcp/server.py"
       ]
     }
   }
@@ -465,7 +466,7 @@ print(diag.recommendation)
 Test your server with the MCP Inspector:
 
 ```bash
-cd /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp
+cd ubuntu-desktop-control-mcp
 source .venv/bin/activate
 npx @modelcontextprotocol/inspector python3 server.py
 ```

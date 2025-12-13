@@ -1,9 +1,9 @@
 {
   "mcpServers": {
     "ubuntu-desktop-control": {
-      "command": "/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/python3",
+      "command": "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3",
       "args": [
-        "/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py"
+        "/path/to/ubuntu-desktop-control-mcp/server.py"
       ]
     }
   }

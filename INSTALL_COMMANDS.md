@@ -7,7 +7,7 @@ Quick reference for installing the Ubuntu Desktop Control MCP server to each cli
 Make sure the server is installed and tested first:
 
 ```bash
-cd /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp
+cd ubuntu-desktop-control-mcp
 source .venv/bin/activate
 python3 test_server.py  # Should show all tests passing
 ```
@@ -20,8 +20,8 @@ python3 test_server.py  # Should show all tests passing
 
 ```bash
 claude mcp add --transport stdio ubuntu-desktop-control -- \
-  /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/python3 \
-  /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py
+  /path/to/ubuntu-desktop-control-mcp/.venv/bin/python3 \
+  /path/to/ubuntu-desktop-control-mcp/server.py
 ```
 
 **Verify Installation:**
@@ -49,9 +49,9 @@ Edit `~/.claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "ubuntu-desktop-control": {
-      "command": "/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/python3",
+      "command": "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3",
       "args": [
-        "/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py"
+        "/path/to/ubuntu-desktop-control-mcp/server.py"
       ]
     }
   }
@@ -79,9 +79,9 @@ Create or edit `.vscode/mcp.json` in your workspace:
   "servers": {
     "ubuntu-desktop-control": {
       "type": "stdio",
-      "command": "/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/python3",
+      "command": "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3",
       "args": [
-        "/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py"
+        "/path/to/ubuntu-desktop-control-mcp/server.py"
       ]
     }
   }
@@ -103,8 +103,8 @@ Create or edit `.vscode/mcp.json` in your workspace:
 
 ```bash
 codex mcp add ubuntu-desktop-control -- \
-  /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/python3 \
-  /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py
+  /path/to/ubuntu-desktop-control-mcp/.venv/bin/python3 \
+  /path/to/ubuntu-desktop-control-mcp/server.py
 ```
 
 **Verify Installation:**
@@ -133,8 +133,8 @@ Add to the `[mcp_servers]` section:
 ```toml
 [mcp_servers.ubuntu-desktop-control]
 type = "stdio"
-command = "/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/python3"
-args = ["/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py"]
+command = "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3"
+args = ["/path/to/ubuntu-desktop-control-mcp/server.py"]
 ```
 
 **Note:** The `type = "stdio"` field is **required** for stdio transport in TOML format.
@@ -146,9 +146,9 @@ args = ["/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py"]
   "mcpServers": {
     "ubuntu-desktop-control": {
       "type": "stdio",
-      "command": "/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/python3",
+      "command": "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3",
       "args": [
-        "/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py"
+        "/path/to/ubuntu-desktop-control-mcp/server.py"
       ]
     }
   }
@@ -166,8 +166,8 @@ args = ["/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py"]
 **Claude Code:**
 ```bash
 claude mcp add --transport stdio ubuntu-desktop-control -- \
-  /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/python3 \
-  /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py
+  /path/to/ubuntu-desktop-control-mcp/.venv/bin/python3 \
+  /path/to/ubuntu-desktop-control-mcp/server.py
 ```
 
 **VS Code Insiders:**
@@ -177,8 +177,8 @@ Create `.vscode/mcp.json` with:
   "servers": {
     "ubuntu-desktop-control": {
       "type": "stdio",
-      "command": "/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/python3",
-      "args": ["/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py"]
+      "command": "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3",
+      "args": ["/path/to/ubuntu-desktop-control-mcp/server.py"]
     }
   }
 }
@@ -187,16 +187,16 @@ Create `.vscode/mcp.json` with:
 **Codex CLI:**
 ```bash
 codex mcp add ubuntu-desktop-control -- \
-  /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/python3 \
-  /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py
+  /path/to/ubuntu-desktop-control-mcp/.venv/bin/python3 \
+  /path/to/ubuntu-desktop-control-mcp/server.py
 ```
 
 Or add to `~/.codex/config.toml`:
 ```toml
 [mcp_servers.ubuntu-desktop-control]
 type = "stdio"
-command = "/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/python3"
-args = ["/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py"]
+command = "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3"
+args = ["/path/to/ubuntu-desktop-control-mcp/server.py"]
 ```
 
 ---
@@ -238,10 +238,10 @@ codex
 **Solution:** Verify paths are absolute:
 ```bash
 # Check Python path exists
-ls -la /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/python3
+ls -la /path/to/ubuntu-desktop-control-mcp/.venv/bin/python3
 
 # Check server.py exists
-ls -la /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py
+ls -la /path/to/ubuntu-desktop-control-mcp/server.py
 ```
 
 ### Server Fails to Start
@@ -250,8 +250,8 @@ ls -la /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py
 
 **Solution:** Test manually:
 ```bash
-source /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/activate
-python3 /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py
+source /path/to/ubuntu-desktop-control-mcp/.venv/bin/activate
+python3 /path/to/ubuntu-desktop-control-mcp/server.py
 # Should start and wait for input (use Ctrl+C to exit)
 ```
 
@@ -284,16 +284,16 @@ If you need to pass environment variables to the server:
 ```bash
 claude mcp add --transport stdio ubuntu-desktop-control \
   --env DISPLAY=:0 \
-  -- /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/python3 \
-     /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py
+  -- /path/to/ubuntu-desktop-control-mcp/.venv/bin/python3 \
+     /path/to/ubuntu-desktop-control-mcp/server.py
 ```
 
 ### Codex
 ```bash
 codex mcp add ubuntu-desktop-control \
   --env DISPLAY=:0 \
-  -- /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/.venv/bin/python3 \
-     /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py
+  -- /path/to/ubuntu-desktop-control-mcp/.venv/bin/python3 \
+     /path/to/ubuntu-desktop-control-mcp/server.py
 ```
 
 ### VS Code / Manual Config

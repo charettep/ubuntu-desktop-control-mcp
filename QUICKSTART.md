@@ -19,7 +19,7 @@ If you see `wayland`, you'll need to switch to X11 session (logout and select "G
 ### Step 1: Install System Dependencies
 
 ```bash
-cd /home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp
+cd ubuntu-desktop-control-mcp
 ./install_system_deps.sh
 ```
 
@@ -60,7 +60,7 @@ Add to `~/.claude/claude_desktop_config.json`:
     "ubuntu-desktop-control": {
       "command": "python3",
       "args": [
-        "/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py"
+        "/path/to/ubuntu-desktop-control-mcp/server.py"
       ]
     }
   }
@@ -84,7 +84,7 @@ Add to Settings (JSON):
     "ubuntu-desktop-control": {
       "command": "python3",
       "args": [
-        "/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py"
+        "/path/to/ubuntu-desktop-control-mcp/server.py"
       ]
     }
   }
@@ -101,7 +101,7 @@ Add to `~/.config/codex/config.json`:
     "ubuntu-desktop-control": {
       "command": "python3",
       "args": [
-        "/home/p/1_Projects/1_Docs/mcp/ubuntu-desktop-control-mcp/server.py"
+        "/path/to/ubuntu-desktop-control-mcp/server.py"
       ]
     }
   }
