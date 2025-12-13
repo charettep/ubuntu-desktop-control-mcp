@@ -4,8 +4,7 @@
       "command": "ubuntu-desktop-control",
       "args": [],
       "env": {
-        "DISPLAY": ":0",
-        "XAUTHORITY": "/home/user/.Xauthority"
+        "DISPLAY": ":0"
       }
     }
   }
