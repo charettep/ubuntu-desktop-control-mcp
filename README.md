@@ -41,8 +41,9 @@ python3 test_server.py
 
 ## Configuration
 
+### Claude Code
 <details>
-<summary><strong>Claude Code</strong></summary>
+<summary>Installation Methods</summary>
 
 #### Method 1: CLI (Recommended)
 ```bash
@@ -65,8 +66,9 @@ Edit `~/.claude/claude_desktop_config.json`:
 ```
 </details>
 
+### VS Code Insiders
 <details>
-<summary><strong>VS Code Insiders</strong></summary>
+<summary>Installation Methods</summary>
 
 #### Method 1: MCP Command
 1. Open Command Palette (`Ctrl+Shift+P`)
@@ -88,8 +90,9 @@ Create `.vscode/mcp.json` in your workspace:
 ```
 </details>
 
+### Codex CLI
 <details>
-<summary><strong>Codex CLI</strong></summary>
+<summary>Installation Methods</summary>
 
 #### Method 1: CLI
 ```bash
