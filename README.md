@@ -120,6 +120,7 @@ args = ["/path/to/ubuntu-desktop-control-mcp/server.py"]
 | `take_screenshot` | Capture the desktop or a specific region to a file. |
 | `click_screen` | Click at specific coordinates. Supports auto-scaling for HiDPI displays. |
 | `move_mouse` | Move the cursor to coordinates without clicking. |
+| `drag_mouse` | Drag the cursor to coordinates while holding a mouse button. |
 | `type_text` | Type text using the keyboard. |
 | `press_key` | Press a specific key (e.g., 'enter', 'esc'). |
 | `press_hotkey` | Press a combination of keys simultaneously (e.g., Ctrl+Shift+C). |

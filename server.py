@@ -606,6 +606,62 @@ def move_mouse(x: int, y: int, duration: float = 0.0) -> MouseClickResult:
 
 
 @mcp.tool()
+def drag_mouse(
+    x: int,
+    y: int,
+    button: str = "left",
+    duration: float = 0.5
+) -> MouseClickResult:
+    """
+    Drag the mouse cursor to specific coordinates while holding a button.
+
+    This tool performs a "click and drag" operation. It starts from the CURRENT
+    mouse position and drags to the specified (x, y) coordinates.
+    Useful for selecting text, moving windows, or drag-and-drop operations.
+
+    Args:
+        x: Target X coordinate in pixels
+        y: Target Y coordinate in pixels
+        button: Mouse button to hold down (default "left")
+        duration: Time in seconds to perform the drag (default 0.5)
+
+    Returns:
+        MouseClickResult with success status
+
+    Examples:
+        - drag_mouse(x=500, y=300) - Drag from current pos to (500, 300)
+    """
+    pyautogui = _get_pyautogui()
+    if pyautogui is None:
+        return MouseClickResult(
+            success=False,
+            x=0, y=0, button=button, clicks=0,
+            error=_pyautogui_error or "PyAutoGUI not available"
+        )
+
+    warnings = _collect_env_warnings()
+
+    try:
+        pyautogui.dragTo(x, y, duration=duration, button=button)
+
+        return MouseClickResult(
+            success=True,
+            x=x,
+            y=y,
+            button=button,
+            clicks=0,
+            warnings=warnings or None,
+        )
+    except Exception as e:  # noqa: BLE001
+        return MouseClickResult(
+            success=False,
+            x=x, y=y, button=button, clicks=0,
+            error=f"Mouse drag failed: {str(e)}",
+            warnings=warnings or None,
+        )
+
+
+@mcp.tool()
 def type_text(text: str, interval: float = 0.0) -> MouseClickResult:
     """
     Type text using the keyboard.
