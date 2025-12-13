@@ -129,8 +129,6 @@ codex mcp remove ubuntu-desktop-control
 
 Edit `~/.codex/config.toml`:
 
-Add to the `[mcp_servers]` section:
-
 ```toml
 [mcp_servers.ubuntu-desktop-control]
 type = "stdio"
@@ -139,24 +137,6 @@ args = ["/path/to/ubuntu-desktop-control-mcp/server.py"]
 ```
 
 **Note:** The `type = "stdio"` field is **required** for stdio transport in TOML format.
-
-**Alternative JSON format** (if your Codex uses JSON config):
-
-```json
-{
-  "mcpServers": {
-    "ubuntu-desktop-control": {
-      "type": "stdio",
-      "command": "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3",
-      "args": [
-        "/path/to/ubuntu-desktop-control-mcp/server.py"
-      ]
-    }
-  }
-}
-```
-
-**Note:** The `"type": "stdio"` field is **required** for stdio transport in JSON format.
 
 ---
 

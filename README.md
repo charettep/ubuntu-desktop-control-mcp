@@ -105,20 +105,13 @@ claude mcp add --transport stdio ubuntu-desktop-control -- \
   /path/to/ubuntu-desktop-control-mcp/server.py
 ```
 
-**Or** manually add to your `~/.claude/claude_desktop_config.json`:
+**Or** manually add to your Codex configuration file (`~/.config/codex/config.toml`):
 
-```json
-{
-  "mcpServers": {
-    "ubuntu-desktop-control": {
-      "type": "stdio",
-      "command": "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3",
-      "args": [
-        "/path/to/ubuntu-desktop-control-mcp/server.py"
-      ]
-    }
-  }
-}
+```toml
+[mcp_servers.ubuntu-desktop-control]
+type = "stdio"
+command = "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3"
+args = ["/path/to/ubuntu-desktop-control-mcp/server.py"]
 ```
 
 **Important:** Use the virtual environment's Python to ensure all dependencies are available.
@@ -138,11 +131,11 @@ mcp install server.py --name "ubuntu-desktop-control"
 code-insiders --add-mcp '{"ubuntu-desktop-control":{"command":"/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3","args":["/path/to/ubuntu-desktop-control-mcp/server.py"]}}'
 ```
 
-**Or** manually add to your VS Code settings (`.vscode/settings.json` or user settings):
+**Or** manually add to your VS Code settings (`.vscode/mcp.json`):
 
 ```json
 {
-  "mcp.servers": {
+  "servers": {
     "ubuntu-desktop-control": {
       "type": "stdio",
       "command": "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3",

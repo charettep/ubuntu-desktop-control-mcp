@@ -93,19 +93,13 @@ Add to Settings (JSON):
 
 ### For Codex CLI
 
-Add to `~/.config/codex/config.json`:
+Add to `~/.config/codex/config.toml`:
 
-```json
-{
-  "mcpServers": {
-    "ubuntu-desktop-control": {
-      "command": "python3",
-      "args": [
-        "/path/to/ubuntu-desktop-control-mcp/server.py"
-      ]
-    }
-  }
-}
+```toml
+[mcp_servers.ubuntu-desktop-control]
+type = "stdio"
+command = "python3"
+args = ["/path/to/ubuntu-desktop-control-mcp/server.py"]
 ```
 
 ## Test with MCP Inspector
