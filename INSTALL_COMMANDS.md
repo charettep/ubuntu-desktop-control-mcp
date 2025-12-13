@@ -49,6 +49,7 @@ Edit `~/.claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "ubuntu-desktop-control": {
+      "type": "stdio",
       "command": "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3",
       "args": [
         "/path/to/ubuntu-desktop-control-mcp/server.py"

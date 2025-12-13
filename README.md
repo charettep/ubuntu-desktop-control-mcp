@@ -50,7 +50,7 @@ sudo apt install -y python3-xlib scrot python3-tk python3-dev gnome-screenshot
 ### 1. Clone or Download
 
 ```bash
-git clone https://github.com/yourusername/ubuntu-desktop-control-mcp.git
+git clone https://github.com/charettep/ubuntu-desktop-control-mcp.git
 cd ubuntu-desktop-control-mcp
 ```
 
@@ -111,6 +111,7 @@ claude mcp add --transport stdio ubuntu-desktop-control -- \
 {
   "mcpServers": {
     "ubuntu-desktop-control": {
+      "type": "stdio",
       "command": "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3",
       "args": [
         "/path/to/ubuntu-desktop-control-mcp/server.py"
@@ -143,6 +144,7 @@ code-insiders --add-mcp '{"ubuntu-desktop-control":{"command":"/path/to/ubuntu-d
 {
   "mcp.servers": {
     "ubuntu-desktop-control": {
+      "type": "stdio",
       "command": "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3",
       "args": [
         "/path/to/ubuntu-desktop-control-mcp/server.py"
@@ -166,7 +168,8 @@ codex mcp add ubuntu-desktop-control -- \
 ```json
 {
   "mcpServers": {
-    "ubuntu-desktop-control": {
+    "ubtype": "stdio",
+      "untu-desktop-control": {
       "command": "/path/to/ubuntu-desktop-control-mcp/.venv/bin/python3",
       "args": [
         "/path/to/ubuntu-desktop-control-mcp/server.py"
