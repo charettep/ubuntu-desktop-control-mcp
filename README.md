@@ -41,19 +41,17 @@ python3 test_server.py
 
 ## Configuration
 
-Choose your client below to configure the server.
-
 <details>
 <summary><strong>Claude Code</strong></summary>
 
-### Method 1: CLI (Recommended)
+#### Method 1: CLI (Recommended)
 ```bash
 claude mcp add --transport stdio ubuntu-desktop-control -- \
   /path/to/ubuntu-desktop-control-mcp/.venv/bin/python3 \
   /path/to/ubuntu-desktop-control-mcp/server.py
 ```
 
-### Method 2: Manual Config
+#### Method 2: Manual Config
 Edit `~/.claude/claude_desktop_config.json`:
 ```json
 {
@@ -70,12 +68,12 @@ Edit `~/.claude/claude_desktop_config.json`:
 <details>
 <summary><strong>VS Code Insiders</strong></summary>
 
-### Method 1: MCP Command
+#### Method 1: MCP Command
 1. Open Command Palette (`Ctrl+Shift+P`)
 2. Run `MCP: Open Workspace Folder Configuration`
 3. Add the server configuration below.
 
-### Method 2: Manual Config
+#### Method 2: Manual Config
 Create `.vscode/mcp.json` in your workspace:
 ```json
 {
@@ -93,14 +91,14 @@ Create `.vscode/mcp.json` in your workspace:
 <details>
 <summary><strong>Codex CLI</strong></summary>
 
-### Method 1: CLI
+#### Method 1: CLI
 ```bash
 codex mcp add ubuntu-desktop-control -- \
   /path/to/ubuntu-desktop-control-mcp/.venv/bin/python3 \
   /path/to/ubuntu-desktop-control-mcp/server.py
 ```
 
-### Method 2: Manual Config
+#### Method 2: Manual Config
 Edit `~/.config/codex/config.toml`:
 ```toml
 [mcp_servers.ubuntu-desktop-control]
