@@ -161,13 +161,52 @@ These tools allow clients without native prompt support (like Codex CLI) to rend
 | `coordinate_mismatch_recovery` | Diagnose and fix missed clicks. |
 | `end_to_end_capture_and_act` | Plan and execute a full interaction loop. |
 
-## Environment Variables
+## Configuration & Customization
 
-| Variable | Description |
-|----------|-------------|
-| `XDG_SESSION_TYPE` | Used to detect display server. Should be `x11` for best results. |
-| `DISPLAY` | X11 display identifier (default `:0`). Required for `pyautogui`. |
+### Environment Variables
 
+The server relies on standard Linux/X11 environment variables to locate and interact with the desktop session.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DISPLAY` | X11 display identifier. Required for the server to know *which* screen to control. | `:0` |
+| `XDG_SESSION_TYPE` | Used to detect if running on X11 or Wayland. | `unknown` |
+| `XAUTHORITY` | Path to X11 authority file. Required if running from a different user context (e.g., sudo, docker) or over SSH. | `~/.Xauthority` |
+
+### Passing Environment Variables
+
+You can customize these variables in your MCP client configuration.
+
+#### Claude Desktop (`claude_desktop_config.json`)
+```json
+{
+  "mcpServers": {
+    "ubuntu-desktop-control": {
+      "command": "/path/to/.../python3",
+      "args": ["/path/to/.../server.py"],
+      "env": {
+        "DISPLAY": ":0",
+        "XAUTHORITY": "/home/user/.Xauthority"
+      }
+    }
+  }
+}
+```
+
+#### VS Code (`.vscode/mcp.json`)
+```json
+{
+  "servers": {
+    "ubuntu-desktop-control": {
+      "command": "/path/to/.../python3",
+      "args": ["/path/to/.../server.py"],
+      "env": {
+        "DISPLAY": ":0"
+      }
+    }
+  }
+}
+```
 
 ## Display Scaling & Coordinates
 
