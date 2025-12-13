@@ -6,6 +6,7 @@ An MCP (Model Context Protocol) server that enables LLMs to control your Ubuntu 
 
 - 📸 **Screenshot Capture**: Take full or partial screenshots of the desktop
 - 🖱️ **Mouse Control**: Click at specific pixel coordinates (left, right, middle button)
+- ⌨️ **Keyboard Control**: Type text and press keys
 - 🖥️ **Screen Info**: Query screen dimensions and display server type
 - 🎯 **Mouse Movement**: Move cursor to specific positions with optional animation
 - 🔍 **Display Scaling Detection**: Automatically detect and report HiDPI/scaling mismatches
@@ -119,6 +120,8 @@ args = ["/path/to/ubuntu-desktop-control-mcp/server.py"]
 | `take_screenshot` | Capture the desktop or a specific region to a file. |
 | `click_screen` | Click at specific coordinates. Supports auto-scaling for HiDPI displays. |
 | `move_mouse` | Move the cursor to coordinates without clicking. |
+| `type_text` | Type text using the keyboard. |
+| `press_key` | Press a specific key (e.g., 'enter', 'esc'). |
 | `get_screen_info` | Get screen dimensions and display server type (X11/Wayland). |
 | `get_display_diagnostics` | Troubleshoot scaling and coordinate mismatches. |
 | `screenshot_with_grid` | Capture screen with a coordinate grid overlay for precise positioning. |

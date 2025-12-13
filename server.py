@@ -606,6 +606,114 @@ def move_mouse(x: int, y: int, duration: float = 0.0) -> MouseClickResult:
 
 
 @mcp.tool()
+def type_text(text: str, interval: float = 0.0) -> MouseClickResult:
+    """
+    Type text using the keyboard.
+
+    This tool types the specified text string. It can be used to enter data into
+    forms, search bars, or terminal windows.
+
+    Args:
+        text: The string of text to type.
+        interval: Seconds to wait between each key press (default 0.0).
+
+    Returns:
+        MouseClickResult with success status (reused model for simplicity)
+
+    Examples:
+        - type_text(text="Hello World") - Types "Hello World" instantly
+        - type_text(text="ls -la", interval=0.1) - Types slowly
+    """
+    pyautogui = _get_pyautogui()
+    if pyautogui is None:
+        return MouseClickResult(
+            success=False,
+            x=0,
+            y=0,
+            button="none",
+            clicks=0,
+            error=_pyautogui_error,
+        )
+
+    warnings = _collect_env_warnings()
+
+    try:
+        pyautogui.write(text, interval=interval)
+        return MouseClickResult(
+            success=True,
+            x=0,
+            y=0,
+            button="none",
+            clicks=0,
+            warnings=warnings or None,
+        )
+    except Exception as e:  # noqa: BLE001
+        return MouseClickResult(
+            success=False,
+            x=0,
+            y=0,
+            button="none",
+            clicks=0,
+            error=f"Type text failed: {str(e)}",
+            warnings=warnings or None,
+        )
+
+
+@mcp.tool()
+def press_key(key: str) -> MouseClickResult:
+    """
+    Press a specific key on the keyboard.
+
+    This tool presses a single key. Useful for navigation (arrows, enter, esc)
+    or shortcuts.
+
+    Args:
+        key: The name of the key to press. Examples: 'enter', 'esc', 'left', 'f1', 'a'.
+             See pyautogui documentation for full list of valid key names.
+
+    Returns:
+        MouseClickResult with success status
+
+    Examples:
+        - press_key(key="enter")
+        - press_key(key="esc")
+    """
+    pyautogui = _get_pyautogui()
+    if pyautogui is None:
+        return MouseClickResult(
+            success=False,
+            x=0,
+            y=0,
+            button="none",
+            clicks=0,
+            error=_pyautogui_error,
+        )
+
+    warnings = _collect_env_warnings()
+
+    try:
+        pyautogui.press(key)
+        return MouseClickResult(
+            success=True,
+            x=0,
+            y=0,
+            button="none",
+            clicks=0,
+            warnings=warnings or None,
+        )
+    except Exception as e:  # noqa: BLE001
+        return MouseClickResult(
+            success=False,
+            x=0,
+            y=0,
+            button="none",
+            clicks=0,
+            error=f"Press key failed: {str(e)}",
+            warnings=warnings or None,
+        )
+
+
+@mcp.tool()
 def get_display_diagnostics() -> DiagnosticInfo:
     """
     Get detailed diagnostic information about display scaling and coordinate systems.
