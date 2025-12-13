@@ -122,6 +122,7 @@ args = ["/path/to/ubuntu-desktop-control-mcp/server.py"]
 | `move_mouse` | Move the cursor to coordinates without clicking. |
 | `type_text` | Type text using the keyboard. |
 | `press_key` | Press a specific key (e.g., 'enter', 'esc'). |
+| `press_hotkey` | Press a combination of keys simultaneously (e.g., Ctrl+Shift+C). |
 | `get_screen_info` | Get screen dimensions and display server type (X11/Wayland). |
 | `get_display_diagnostics` | Troubleshoot scaling and coordinate mismatches. |
 | `screenshot_with_grid` | Capture screen with a coordinate grid overlay for precise positioning. |

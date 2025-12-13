@@ -714,6 +714,60 @@ def press_key(key: str) -> MouseClickResult:
 
 
 @mcp.tool()
+def press_hotkey(keys: List[str]) -> MouseClickResult:
+    """
+    Press a combination of keys simultaneously (e.g., Ctrl+Shift+C).
+
+    This tool performs a hotkey combination. It presses the keys in order,
+    holds them down, then releases them in reverse order.
+
+    Args:
+        keys: List of keys to press. Example: ["ctrl", "shift", "c"] or ["alt", "tab"]
+
+    Returns:
+        MouseClickResult with success status
+
+    Examples:
+        - press_hotkey(keys=["ctrl", "c"]) - Copy
+        - press_hotkey(keys=["ctrl", "shift", "c"]) - Terminal Copy
+        - press_hotkey(keys=["alt", "f4"]) - Close window
+    """
+    pyautogui = _get_pyautogui()
+    if pyautogui is None:
+        return MouseClickResult(
+            success=False,
+            x=0,
+            y=0,
+            button="none",
+            clicks=0,
+            error=_pyautogui_error,
+        )
+
+    warnings = _collect_env_warnings()
+
+    try:
+        pyautogui.hotkey(*keys)
+        return MouseClickResult(
+            success=True,
+            x=0,
+            y=0,
+            button="none",
+            clicks=0,
+            warnings=warnings or None,
+        )
+    except Exception as e:  # noqa: BLE001
+        return MouseClickResult(
+            success=False,
+            x=0,
+            y=0,
+            button="none",
+            clicks=0,
+            error=f"Hotkey failed: {str(e)}",
+            warnings=warnings or None,
+        )
+
+
+@mcp.tool()
 def get_display_diagnostics() -> DiagnosticInfo:
     """
     Get detailed diagnostic information about display scaling and coordinate systems.
