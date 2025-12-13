@@ -1,0 +1,31 @@
+{
+  "name": "grid_overlay_snapshot",
+  "title": "Grid overlay screenshot for coordinates",
+  "description": "Capture a grid-annotated screenshot to make click coordinates explicit.",
+  "arguments": [
+    {
+      "name": "goal",
+      "description": "What you plan to click or inspect",
+      "required": true
+    },
+    {
+      "name": "grid_size",
+      "description": "Grid spacing in logical pixels (default 100)",
+      "required": false
+    },
+    {
+      "name": "output_path",
+      "description": "Optional custom path for the grid screenshot",
+      "required": false
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": {
+        "type": "text",
+        "text": "Goal: {{goal}}. Call `screenshot_with_grid` using grid_size={{grid_size}} when provided and output_path={{output_path}} when provided. Return file_path, scaling_factor/warnings, and remind that grid labels are logical coordinates for `click_screen`. If the target is visible, list 1-3 candidate logical coordinates to click."
+      }
+    }
+  ]
+}
