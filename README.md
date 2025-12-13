@@ -113,6 +113,7 @@ args = ["/path/to/ubuntu-desktop-control-mcp/server.py"]
 
 ## Tools
 
+### Core Capabilities
 | Tool | Description |
 |------|-------------|
 | `take_screenshot` | Capture the desktop or a specific region to a file. |
@@ -123,6 +124,23 @@ args = ["/path/to/ubuntu-desktop-control-mcp/server.py"]
 | `screenshot_with_grid` | Capture screen with a coordinate grid overlay for precise positioning. |
 | `screenshot_quadrants` | Split screen into 4 quadrants for easier analysis of high-res displays. |
 | `convert_screenshot_coordinates` | Convert pixels from a screenshot to logical click coordinates. |
+| `list_prompt_templates` | List available prompt templates (for clients without native prompt support). |
+
+### Prompt Rendering Tools
+These tools allow clients without native prompt support (like Codex CLI) to render prompt templates as text.
+
+| Tool | Description |
+|------|-------------|
+| `render_prompt_baseline_display_check` | Render the baseline display check prompt. |
+| `render_prompt_capture_full_desktop` | Render the full desktop capture prompt. |
+| `render_prompt_capture_region_for_task` | Render the region capture prompt. |
+| `render_prompt_grid_overlay_snapshot` | Render the grid overlay prompt. |
+| `render_prompt_quadrant_scan` | Render the quadrant scan prompt. |
+| `render_prompt_convert_screenshot_coordinates` | Render the coordinate conversion prompt. |
+| `render_prompt_safe_click` | Render the safe click prompt. |
+| `render_prompt_hover_and_capture` | Render the hover and capture prompt. |
+| `render_prompt_coordinate_mismatch_recovery` | Render the mismatch recovery prompt. |
+| `render_prompt_end_to_end_capture_and_act` | Render the end-to-end workflow prompt. |
 
 ## Prompts
 
@@ -145,49 +163,6 @@ args = ["/path/to/ubuntu-desktop-control-mcp/server.py"]
 | `XDG_SESSION_TYPE` | Used to detect display server. Should be `x11` for best results. |
 | `DISPLAY` | X11 display identifier (default `:0`). Required for `pyautogui`. |
 
-
-## Available Tools
-
-| Tool | Purpose |
-|------|---------|
-| `take_screenshot` | Capture desktop image (full or region) |
-| `click_screen` | Click at coordinates (supports auto-scaling) |
-| `get_screen_info` | Get screen dimensions and display server type |
-| `move_mouse` | Move cursor to specific positions |
-| `get_display_diagnostics` | Analyze display scaling and coordinate systems |
-| `convert_screenshot_coordinates` | Map screenshot pixels to logical click coordinates |
-| `screenshot_with_grid` | Debugging: Screenshot with coordinate grid overlay |
-| `screenshot_quadrants` | Debugging: Split screen into 4 grids for high-res displays |
-
-<details>
-<summary><strong>View Detailed Tool Documentation</strong></summary>
-
-### `take_screenshot`
-Captures a screenshot of the desktop.
-- **Parameters**: `output_path` (optional), `region` (optional "x,y,w,h")
-- **Returns**: Image path, dimensions, scaling factor
-
-### `click_screen`
-Sends mouse click at specified coordinates.
-- **Parameters**: `x`, `y`, `button` (left/right/middle), `clicks`, `interval`, `auto_scale`
-- **Example**: `click_screen(x=500, y=300, auto_scale=True)`
-
-### `get_screen_info`
-Gets screen dimensions and display server info.
-
-### `move_mouse`
-Moves mouse cursor without clicking.
-- **Parameters**: `x`, `y`, `duration`
-
-### `get_display_diagnostics`
-Returns detailed scaling info and recommendations for fixing coordinate mismatches.
-
-### `convert_screenshot_coordinates`
-Helper to convert physical screenshot pixels to logical click coordinates.
-
-### `screenshot_with_grid` & `screenshot_quadrants`
-Visual debugging tools that overlay coordinate grids on screenshots.
-</details>
 
 ## Display Scaling & Coordinates
 
