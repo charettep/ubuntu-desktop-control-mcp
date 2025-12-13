@@ -111,6 +111,41 @@ args = ["/path/to/ubuntu-desktop-control-mcp/server.py"]
 ```
 </details>
 
+## Tools
+
+| Tool | Description |
+|------|-------------|
+| `take_screenshot` | Capture the desktop or a specific region to a file. |
+| `click_screen` | Click at specific coordinates. Supports auto-scaling for HiDPI displays. |
+| `move_mouse` | Move the cursor to coordinates without clicking. |
+| `get_screen_info` | Get screen dimensions and display server type (X11/Wayland). |
+| `get_display_diagnostics` | Troubleshoot scaling and coordinate mismatches. |
+| `screenshot_with_grid` | Capture screen with a coordinate grid overlay for precise positioning. |
+| `screenshot_quadrants` | Split screen into 4 quadrants for easier analysis of high-res displays. |
+| `convert_screenshot_coordinates` | Convert pixels from a screenshot to logical click coordinates. |
+
+## Prompts
+
+| Prompt | Description |
+|--------|-------------|
+| `baseline_display_check` | Check display settings and scaling before starting tasks. |
+| `capture_full_desktop` | Capture and summarize the full desktop state. |
+| `capture_region_for_task` | Capture a specific region for detailed inspection. |
+| `grid_overlay_snapshot` | Capture with grid to identify precise coordinates. |
+| `quadrant_scan` | Analyze high-res screens using quadrants. |
+| `safe_click` | Perform a click with safety checks and scaling awareness. |
+| `hover_and_capture` | Hover to reveal UI elements, then capture. |
+| `coordinate_mismatch_recovery` | Diagnose and fix missed clicks. |
+| `end_to_end_capture_and_act` | Plan and execute a full interaction loop. |
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `XDG_SESSION_TYPE` | Used to detect display server. Should be `x11` for best results. |
+| `DISPLAY` | X11 display identifier (default `:0`). Required for `pyautogui`. |
+
+
 ## Available Tools
 
 | Tool | Purpose |
