@@ -15,7 +15,7 @@ import os
 import shutil
 import textwrap
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 # pyautogui tries to connect to the display at import time. On headless systems
@@ -83,6 +83,36 @@ def _prompt_text(template: str) -> str:
 
 # Cache for scaling factor detection (factor, logical size, actual size)
 _scaling_factor_cache: Optional[Tuple[float, Tuple[int, int], Tuple[int, int]]] = None
+
+
+def _clamp(value: float, min_value: float, max_value: float) -> float:
+    return max(min_value, min(max_value, value))
+
+
+def _safe_percent(numerator: float, denominator: float) -> float:
+    if denominator <= 0:
+        return 0.0
+    return _clamp(numerator / denominator, 0.0, 1.0)
+
+
+def _element_cache_to_xy(
+    *,
+    elem: Dict[str, Any],
+    screen_width: int,
+    screen_height: int,
+) -> Tuple[int, int]:
+    """Resolve a cached element to logical (x, y) click coordinates.
+
+    Supports both legacy cache entries (x/y) and new cache entries (x_percent/y_percent).
+    """
+    if "x_percent" in elem and "y_percent" in elem:
+        x_percent = float(elem["x_percent"])
+        y_percent = float(elem["y_percent"])
+        x_percent = _clamp(x_percent, 0.0, 1.0)
+        y_percent = _clamp(y_percent, 0.0, 1.0)
+        return int(screen_width * x_percent), int(screen_height * y_percent)
+
+    return int(elem.get("x", 0)), int(elem.get("y", 0))
 
 
 def _detect_scaling_factor(
@@ -388,8 +418,8 @@ def take_screenshot(
     warnings = _collect_env_warnings()
 
     try:
-        # Get screen dimensions
-        actual_width, actual_height = pyautogui.size()
+        # Logical screen dimensions (what PyAutoGUI uses for input coordinates)
+        logical_width, logical_height = pyautogui.size()
         
         # Set output directory
         if output_dir is None:
@@ -398,10 +428,18 @@ def take_screenshot(
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        # Capture full-resolution screenshot
+        # Capture full-resolution screenshot (physical pixels)
         screenshot, img_width, img_height, backend_warning = _get_screenshot_with_backend(pyautogui)
         if backend_warning:
             warnings.append(backend_warning)
+
+        scaling_factor, scaling_warning = _detect_scaling_factor(
+            pyautogui,
+            logical_size=(logical_width, logical_height),
+            actual_size=(img_width, img_height),
+        )
+        if scaling_warning:
+            warnings.append(scaling_warning)
         
         # Save original full-resolution version
         original_path = os.path.join(output_dir, f"screenshot_original_{timestamp}.png")
@@ -415,7 +453,8 @@ def take_screenshot(
         # Calculate scaling to fit within target dimensions while maintaining aspect ratio
         width_ratio = target_width / img_width
         height_ratio = target_height / img_height
-        scale_ratio = min(width_ratio, height_ratio)
+        # Avoid upscaling small screens (adds blur without adding detail)
+        scale_ratio = min(width_ratio, height_ratio, 1.0)
         
         display_width = int(img_width * scale_ratio)
         display_height = int(img_height * scale_ratio)
@@ -424,8 +463,10 @@ def take_screenshot(
         
         scaling_info = (
             f"Screenshot downsampled from {img_width}x{img_height} to {display_width}x{display_height}. "
-            f"All coordinates are in PERCENTAGE format (0.0-1.0). "
-            f"Use click_element(element_id=N) or click_screen(x_percent=0.5, y_percent=0.3)."
+            f"Click by element ID with click_screen(element_id=N) or by percentage with "
+            f"click_screen(x_percent=0.5, y_percent=0.3). "
+            f"Logical input size: {logical_width}x{logical_height}. "
+            f"Detected scaling factor: {scaling_factor:.2f}x."
         )
 
         # Detect elements using AT-SPI if requested
@@ -437,93 +478,179 @@ def take_screenshot(
                 # Try AT-SPI first (most accurate)
                 import pyatspi
                 
-                desktop = pyatspi.Registry.getDesktop(0)
+                def run_at_spi_scan() -> None:
+                    nonlocal element_id
+                    desktop = pyatspi.Registry.getDesktop(0)
+                    for i in range(desktop.childCount):
+                        try:
+                            app = desktop.getChildAtIndex(i)
+                            extract_elements(app, depth=0)
+                        except Exception:
+                            continue
+
                 element_id = 1
                 
-                def extract_elements(node, depth=0, max_depth=10):
+                def extract_elements(node, depth: int = 0, max_depth: int = 10):
                     nonlocal element_id
                     if depth > max_depth or element_id > 50:  # Limit to 50 elements
                         return
-                    
+
+                    # Get element info defensively (do not break recursion if one property fails)
                     try:
-                        # Get element info
                         name = node.name or ""
-                        role = node.getRoleName()
-                        
-                        # Focus on interactive elements
-                        interactive_roles = [
-                            'push button', 'icon', 'menu item', 'check box',
-                            'radio button', 'text', 'entry', 'link', 'list item',
-                            'toggle button', 'application', 'frame'
-                        ]
-                        
-                        if role in interactive_roles and node.component:
-                            # Get position and size
-                            ext = node.component.getExtents(pyatspi.DESKTOP_COORDS)
-                            
-                            if ext.width > 0 and ext.height > 0:
-                                # Check if element is visible on screen
-                                if 0 <= ext.x < img_width and 0 <= ext.y < img_height:
-                                    center_x = ext.x + ext.width // 2
-                                    center_y = ext.y + ext.height // 2
-                                    
-                                    element = AccessibleElement(
-                                        id=element_id,
-                                        name=name or f"{role}",
-                                        role=role,
-                                        x=ext.x,
-                                        y=ext.y,
-                                        width=ext.width,
-                                        height=ext.height,
-                                        center_x=center_x,
-                                        center_y=center_y,
-                                        is_clickable=True,
-                                        children_count=node.childCount
-                                    )
-                                    elements.append(element)
-                                    
-                                    # Store in element map
-                                    element_map[element_id] = {
-                                        "x": center_x,
-                                        "y": center_y,
-                                        "width": ext.width,
-                                        "height": ext.height,
-                                        "name": name,
-                                        "role": role
-                                    }
-                                    
-                                    element_id += 1
-                        
-                        # Recurse to children
-                        for i in range(node.childCount):
-                            try:
-                                child = node.getChildAtIndex(i)
-                                extract_elements(child, depth + 1)
-                            except:
-                                continue
-                                
                     except Exception:
-                        pass
+                        name = ""
+
+                    try:
+                        role = node.getRoleName()
+                    except Exception:
+                        role = ""
+
+                    interactive_roles = [
+                        "push button",
+                        "toggle button",
+                        "check box",
+                        "radio button",
+                        "menu item",
+                        "list item",
+                        "link",
+                        "entry",
+                        "text",
+                        "icon",
+                    ]
+
+                    if role in interactive_roles:
+                        try:
+                            comp = getattr(node, "component", None)
+                            if comp:
+                                ext = comp.getExtents(pyatspi.DESKTOP_COORDS)
+
+                                if ext.width > 0 and ext.height > 0:
+                                    # Filter out giant containers; they're rarely "clickable" targets
+                                    if ext.width * ext.height <= int(img_width * img_height * 0.5):
+                                        raw_center_x = ext.x + ext.width // 2
+                                        raw_center_y = ext.y + ext.height // 2
+
+                                        # Determine coordinate space heuristically
+                                        if 0 <= raw_center_x <= logical_width and 0 <= raw_center_y <= logical_height:
+                                            logical_center_x = int(raw_center_x)
+                                            logical_center_y = int(raw_center_y)
+                                            logical_x = int(ext.x)
+                                            logical_y = int(ext.y)
+                                            logical_w = int(ext.width)
+                                            logical_h = int(ext.height)
+                                        elif (
+                                            0 <= raw_center_x <= img_width
+                                            and 0 <= raw_center_y <= img_height
+                                            and scaling_factor
+                                        ):
+                                            logical_center_x = int(raw_center_x / scaling_factor)
+                                            logical_center_y = int(raw_center_y / scaling_factor)
+                                            logical_x = int(ext.x / scaling_factor)
+                                            logical_y = int(ext.y / scaling_factor)
+                                            logical_w = int(ext.width / scaling_factor)
+                                            logical_h = int(ext.height / scaling_factor)
+                                        else:
+                                            logical_center_x = -1
+                                            logical_center_y = -1
+                                            logical_x = 0
+                                            logical_y = 0
+                                            logical_w = 0
+                                            logical_h = 0
+
+                                        if 0 <= logical_center_x <= logical_width and 0 <= logical_center_y <= logical_height:
+                                            x_percent = _safe_percent(logical_center_x, logical_width)
+                                            y_percent = _safe_percent(logical_center_y, logical_height)
+
+                                            children_count = 0
+                                            try:
+                                                children_count = int(getattr(node, "childCount", 0))
+                                            except Exception:
+                                                children_count = 0
+
+                                            element = AccessibleElement(
+                                                id=element_id,
+                                                name=name or f"{role}",
+                                                role=role,
+                                                x=logical_x,
+                                                y=logical_y,
+                                                width=max(1, logical_w),
+                                                height=max(1, logical_h),
+                                                center_x=logical_center_x,
+                                                center_y=logical_center_y,
+                                                is_clickable=True,
+                                                children_count=children_count,
+                                            )
+                                            elements.append(element)
+
+                                            element_map[element_id] = {
+                                                "x": logical_center_x,
+                                                "y": logical_center_y,
+                                                "width": max(1, logical_w),
+                                                "height": max(1, logical_h),
+                                                "name": name,
+                                                "role": role,
+                                                "x_percent": x_percent,
+                                                "y_percent": y_percent,
+                                            }
+                                            element_id += 1
+                        except Exception:
+                            pass
+
+                    # Recurse to children regardless of extraction errors above
+                    try:
+                        child_count = int(getattr(node, "childCount", 0))
+                    except Exception:
+                        child_count = 0
+                    for i in range(child_count):
+                        try:
+                            child = node.getChildAtIndex(i)
+                            extract_elements(child, depth + 1)
+                        except Exception:
+                            continue
                 
                 # Start extraction from all applications
-                for i in range(desktop.childCount):
-                    try:
-                        app = desktop.getChildAtIndex(i)
-                        extract_elements(app, depth=0)
-                    except:
-                        continue
+                run_at_spi_scan()
+
+                # AT-SPI can race during app startup; retry once if empty.
+                if not elements:
+                    import time
+
+                    time.sleep(0.1)
+                    element_id = 1
+                    elements.clear()
+                    element_map.clear()
+                    run_at_spi_scan()
                 
                 if not elements:
                     warnings.append("AT-SPI found no elements, falling back to CV detection")
                     # Fall back to CV-based detection
-                    elements, element_map = _fallback_cv_detection(screenshot, img_width, img_height)
+                    elements, element_map = _fallback_cv_detection(
+                        screenshot,
+                        img_width,
+                        img_height,
+                        logical_width,
+                        logical_height,
+                    )
                     
             except ImportError:
                 warnings.append("pyatspi not available, using CV-based detection")
-                elements, element_map = _fallback_cv_detection(screenshot, img_width, img_height)
+                elements, element_map = _fallback_cv_detection(
+                    screenshot,
+                    img_width,
+                    img_height,
+                    logical_width,
+                    logical_height,
+                )
             except Exception as e:
                 warnings.append(f"AT-SPI detection failed: {e}, using CV fallback")
-                elements, element_map = _fallback_cv_detection(screenshot, img_width, img_height)
+                elements, element_map = _fallback_cv_detection(
+                    screenshot,
+                    img_width,
+                    img_height,
+                    logical_width,
+                    logical_height,
+                )
         
         # Create annotated version with numbered markers
         annotated = downsampled.copy()
@@ -534,13 +661,21 @@ def take_screenshot(
             # Try to load a font
             try:
                 font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
-            except:
+            except Exception:
                 font = ImageFont.load_default()
             
             for elem in elements:
-                # Scale coordinates to downsampled image
-                x = int(elem.center_x * scale_ratio)
-                y = int(elem.center_y * scale_ratio)
+                # Draw using percentage coordinates when available for best alignment
+                cached = element_map.get(elem.id, {})
+                x_percent = cached.get("x_percent")
+                y_percent = cached.get("y_percent")
+                if x_percent is not None and y_percent is not None:
+                    x = int(display_width * float(x_percent))
+                    y = int(display_height * float(y_percent))
+                else:
+                    # Fallback: treat element coordinates as logical and scale to downsampled
+                    x = int(_safe_percent(elem.center_x, logical_width) * display_width)
+                    y = int(_safe_percent(elem.center_y, logical_height) * display_height)
                 
                 # Draw circle marker
                 radius = 12
@@ -591,10 +726,20 @@ def take_screenshot(
         )
 
 
-def _fallback_cv_detection(screenshot, img_width, img_height):
+def _fallback_cv_detection(
+    screenshot,
+    img_width: int,
+    img_height: int,
+    logical_width: Optional[int] = None,
+    logical_height: Optional[int] = None,
+) -> Tuple[List[AccessibleElement], Dict[int, Dict[str, Any]]]:
     """Fallback CV-based element detection when AT-SPI fails."""
     elements = []
     element_map = {}
+
+    # Backward-compatible defaults: if logical size isn't supplied, assume 1:1
+    logical_width = int(logical_width or img_width)
+    logical_height = int(logical_height or img_height)
     
     try:
         import cv2
@@ -604,22 +749,49 @@ def _fallback_cv_detection(screenshot, img_width, img_height):
         img_array = np.array(screenshot)
         gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
         
-        # Use Canny edge detection (more reliable than adaptive threshold)
+        # Use Canny edge detection (fast, good for UI boundaries)
         edges = cv2.Canny(gray, 50, 150)
-        
-        # Find contours
+
+        # Connect gaps so buttons/inputs become single contours
+        try:
+            kernel = np.ones((3, 3), np.uint8)
+            edges = cv2.dilate(edges, kernel, iterations=1)
+        except Exception:
+            pass
+
+        # Find contours (pass 1)
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # If Canny finds nothing, fall back to threshold-based segmentation
+        if not contours:
+            try:
+                thresh = cv2.adaptiveThreshold(
+                    gray,
+                    255,
+                    cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                    cv2.THRESH_BINARY_INV,
+                    31,
+                    5,
+                )
+                kernel = np.ones((5, 5), np.uint8)
+                closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=1)
+                contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            except Exception:
+                contours = []
         
         # Filter and sort by area
         MIN_WIDTH, MIN_HEIGHT = 20, 20
         valid_contours = []
         for cnt in contours:
-            area = cv2.contourArea(cnt)
-            if area > 100:  # Minimum area threshold
-                x, y, w, h = cv2.boundingRect(cnt)
-                # Focus on UI-sized elements
-                if w >= MIN_WIDTH and h >= MIN_HEIGHT and area < (img_width * img_height * 0.5):
-                    valid_contours.append((area, x, y, w, h))
+            x, y, w, h = cv2.boundingRect(cnt)
+            area = w * h
+            if area <= 100:
+                continue
+            if w < MIN_WIDTH or h < MIN_HEIGHT:
+                continue
+            if area >= int(img_width * img_height * 0.5):
+                continue
+            valid_contours.append((area, x, y, w, h))
         
         # Sort by area and take top 30
         valid_contours.sort(reverse=True)
@@ -627,17 +799,23 @@ def _fallback_cv_detection(screenshot, img_width, img_height):
         
         element_id = 1
         for _, x, y, w, h in valid_contours:
-            center_x = x + w // 2
-            center_y = y + h // 2
+            physical_center_x = x + w // 2
+            physical_center_y = y + h // 2
+
+            # Convert to percent of the screen, then to logical coords (robust to scaling)
+            x_percent = _safe_percent(physical_center_x, img_width)
+            y_percent = _safe_percent(physical_center_y, img_height)
+            center_x = int(logical_width * x_percent)
+            center_y = int(logical_height * y_percent)
             
             element = AccessibleElement(
                 id=element_id,
                 name=f"Element {element_id}",
                 role="detected",
-                x=x,
-                y=y,
-                width=w,
-                height=h,
+                x=int(logical_width * _safe_percent(x, img_width)),
+                y=int(logical_height * _safe_percent(y, img_height)),
+                width=max(1, int(logical_width * _safe_percent(w, img_width))),
+                height=max(1, int(logical_height * _safe_percent(h, img_height))),
                 center_x=center_x,
                 center_y=center_y,
                 is_clickable=True,
@@ -648,10 +826,12 @@ def _fallback_cv_detection(screenshot, img_width, img_height):
             element_map[element_id] = {
                 "x": center_x,
                 "y": center_y,
-                "width": w,
-                "height": h,
+                "width": element.width,
+                "height": element.height,
                 "name": f"Element {element_id}",
-                "role": "detected"
+                "role": "detected",
+                "x_percent": x_percent,
+                "y_percent": y_percent,
             }
             
             element_id += 1
@@ -746,10 +926,10 @@ def click_screen(
         # Get screen dimensions
         screen_width, screen_height = pyautogui.size()
         
-        # Determine click coordinates
+        # Determine click coordinates (logical)
         if element_id is not None:
             # Use cached element coordinates from last screenshot
-            if not hasattr(click_screen, '_element_cache'):
+            if not hasattr(click_screen, '_element_cache') or not getattr(click_screen, '_element_cache'):
                 return MouseClickResult(
                     success=False,
                     x=0,
@@ -770,8 +950,7 @@ def click_screen(
                 )
             
             elem = click_screen._element_cache[element_id]
-            x = elem['x']
-            y = elem['y']
+            x, y = _element_cache_to_xy(elem=elem, screen_width=screen_width, screen_height=screen_height)
             
         elif x_percent is not None and y_percent is not None:
             # Use percentage coordinates
@@ -912,12 +1091,15 @@ def move_mouse(
 
     warnings = _collect_env_warnings()
 
+    x = 0
+    y = 0
+
     try:
         screen_width, screen_height = pyautogui.size()
         
         # Determine coordinates
         if element_id is not None:
-            if not hasattr(click_screen, '_element_cache'):
+            if not hasattr(click_screen, '_element_cache') or not getattr(click_screen, '_element_cache'):
                 return MouseClickResult(
                     success=False,
                     x=0,
@@ -938,8 +1120,7 @@ def move_mouse(
                 )
             
             elem = click_screen._element_cache[element_id]
-            x = elem['x']
-            y = elem['y']
+            x, y = _element_cache_to_xy(elem=elem, screen_width=screen_width, screen_height=screen_height)
             
         elif x_percent is not None and y_percent is not None:
             if not (0.0 <= x_percent <= 1.0 and 0.0 <= y_percent <= 1.0):
@@ -1434,7 +1615,7 @@ def get_display_diagnostics() -> DiagnosticInfo:
             recommendation = (
                 f"Display scaling is active ({scaling_factor:.2f}x). "
                 f"Divide screenshot coordinates by {scaling_factor:.2f} before clicking, "
-                f"or set auto_scale=True in click_screen. "
+                f"or use `convert_screenshot_coordinates` to convert screenshot pixels to logical click coordinates. "
                 f"For example: screenshot (1000, 500) -> click ({int(1000/scaling_factor)}, {int(500/scaling_factor)}). "
                 f"Alternatively, use screenshot_with_grid to visualize logical coordinates."
             )
@@ -1700,7 +1881,7 @@ def map_GUI_elements_location(
         )
 
 
-# @mcp.tool()  # Deprecated - merged into take_screenshot
+@mcp.tool()
 def screenshot_with_grid(
     output_path: Optional[str] = None,
     grid_size: int = 100
@@ -1852,7 +2033,7 @@ def screenshot_with_grid(
         )
 
 
-# @mcp.tool()  # Deprecated - merged into take_screenshot
+@mcp.tool()
 def screenshot_quadrants(
     output_dir: Optional[str] = None,
     grid_size: int = 100
@@ -2068,8 +2249,9 @@ def prompt_baseline_display_check(task_hint: Optional[str] = None) -> str:
     return _prompt_text(
         f"""
         Before working on {target}, call `get_screen_info` and `get_display_diagnostics`.
-        Report display_server, logical size, scaling_factor, scaling_warning, and any environment warnings.
-        Recommend whether to use `auto_scale` or a grid overlay (`screenshot_with_grid`) before clicking.
+        Report display_server, logical size (width/height), scaling_factor, and any warnings.
+        Prefer clicking by element ID from `take_screenshot` or by percentage with `click_screen(x_percent=..., y_percent=...)`.
+        If you need exact logical coordinates for debugging, use `screenshot_with_grid`.
         """
     )
 
@@ -2084,12 +2266,12 @@ def prompt_capture_full_desktop(
     output_path: Optional[str] = None,
 ) -> str:
     """Prompt template for full desktop capture."""
-    path_hint = f"output_path={output_path}" if output_path else "the default output path"
+    path_hint = f"output_dir={output_path}" if output_path else "the default output directory"
     return _prompt_text(
         f"""
-        Goal: {goal}. Call `take_screenshot` for the full screen (use {path_hint}).
-        Return file_path, logical and actual sizes, scaling_factor, and any warnings.
-        List 2-3 concise observations relevant to the goal and suggest a next step (grid overlay, quadrants, or a targeted click).
+        Goal: {goal}. Call `take_screenshot(detect_elements=True)` (use {path_hint}).
+        Return screenshot_path, original_path, display_width/height, actual_width/height, and any warnings.
+        List 2-3 concise observations relevant to the goal and suggest a next step (click by element_id, click by percentage, or a diagnostic grid/quadrant capture).
         """
     )
 
@@ -2106,13 +2288,12 @@ def prompt_capture_region_for_task(
 ) -> str:
     """Prompt template for region capture with validation guidance."""
     goal_text = goal or "this task"
-    path_hint = f"output_path={output_path}" if output_path else "the default output path"
+    path_hint = f"output_dir={output_path}" if output_path else "the default output directory"
     return _prompt_text(
         f"""
-        Goal: {goal_text}. Validate region '{region}' uses x,y,width,height with positive width/height;
-        if invalid, fall back to full-screen capture and mention the fallback.
-        Call `take_screenshot` with that region and {path_hint}.
-        Return file_path, sizes, scaling_factor/warnings, and a short summary of what is visible in that region.
+        Goal: {goal_text}. Call `take_screenshot(detect_elements=True)` ({path_hint}).
+        Focus your analysis on region '{region}' (descriptive guidance; `take_screenshot` currently captures the full screen).
+        Return screenshot_path, any warnings, and a short summary of what is visible in that region.
         """
     )
 
@@ -2177,7 +2358,7 @@ def prompt_convert_screenshot_coordinates(
         f"""
         You measured a screenshot coordinate at ({screenshot_x}, {screenshot_y}) for {target_note}.
         Call `convert_screenshot_coordinates` and return logical_x/logical_y, scaling_factor, and warnings.
-        Provide the exact `click_screen` call to run next, using auto_scale only if the caller prefers to keep screenshot coordinates.
+        Provide the exact `click_screen` call to run next (use x_percent/y_percent derived from logical coords if you want resolution independence).
         """
     )
 
@@ -2200,7 +2381,7 @@ def prompt_safe_click(
     return _prompt_text(
         f"""
         Reason: {rationale}. Prepare to click at ({x}, {y}) using button={button} and clicks={clicks}.
-        If coordinate_source is 'screenshot', enable auto_scale and note the applied scaling; if 'logical', keep auto_scale false.
+        If coordinate_source is 'screenshot', first convert with `convert_screenshot_coordinates` to get logical_x/logical_y.
         If unsure, grab a quick `screenshot_with_grid` first and ask for confirmation.
         Call `click_screen` accordingly and return success, applied_scaling, and any warnings.
         Suggest taking a follow-up screenshot if verification is needed.
@@ -2222,7 +2403,7 @@ def prompt_hover_and_capture(
 ) -> str:
     """Prompt template for hover then capture workflows."""
     goal_text = goal or "the target UI"
-    path_hint = f"output_path={output_path}" if output_path else "the default output path"
+    path_hint = f"output_dir={output_path}" if output_path else "the default output directory"
     return _prompt_text(
         f"""
         Goal: {goal_text}. Move the cursor with `move_mouse` to ({x}, {y}) using duration={duration}.
@@ -2254,7 +2435,7 @@ def prompt_coordinate_mismatch_recovery(
         f"""
         You attempted to click {target_description} at {click_text} and it missed (offset: {offset_text}).
         Run `get_display_diagnostics` to confirm scaling, then capture `screenshot_with_grid` to anchor logical coordinates.
-        If the intended spot is visible, propose corrected logical coords and the exact `click_screen` call (use auto_scale only if using screenshot-measured coords).
+        If the intended spot is visible, propose corrected logical coords and the exact `click_screen` call.
         Keep safety first and suggest reconfirming with a quick screenshot after the next attempt.
         """
     )
@@ -2277,7 +2458,7 @@ def prompt_end_to_end_capture_and_act(
         f"""
         Goal: {goal}. 1) Capture context with `screenshot_quadrants` ({dir_hint}); if the UI is simple, `take_screenshot` is fine.
         2) Identify the control described by {hint_text}, selecting precise logical coordinates (use `convert_screenshot_coordinates` if starting from screenshot pixels).
-        3) Provide the exact `click_screen` call (enable auto_scale only when using screenshot-derived coordinates) and flag any risks.
+        3) Provide the exact `click_screen` call (prefer element_id or percentage coordinates) and flag any risks.
         4) Recommend a quick verification capture (grid or regular screenshot) after the action.
         """
     )
