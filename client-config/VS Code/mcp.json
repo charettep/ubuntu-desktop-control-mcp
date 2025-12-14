@@ -1,0 +1,11 @@
+{
+  "servers": {
+    "ubuntu-desktop-control": {
+      "type": "stdio",
+      "command": "/<your-path-to>/ubuntu-desktop-control-mcp/.venv/bin/python3",
+      "args": [
+        "/<your-path-to>/ubuntu-desktop-control-mcp/server.py"
+      ]
+    }
+  }
+}

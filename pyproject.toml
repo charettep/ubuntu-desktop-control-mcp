@@ -26,6 +26,9 @@ dependencies = [
     "pillow>=10.0.0",
     "pydantic>=2.0.0",
     "mss>=9.0.1",
+    "opencv-python>=4.8.0",
+    "numpy>=1.24.0",
+    # pyatspi is a system package - install via: apt install python3-pyatspi
 ]
 
 [project.urls]
@@ -38,9 +41,36 @@ ubuntu-desktop-control = "ubuntu_desktop_control.server:main"
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
     "pytest-asyncio>=0.21.0",
+    "PyQt5>=5.15.0",  # For test GUI in integration tests
     "build",
     "twine",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short --strict-markers"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests that use real dependencies (X11, PyAutoGUI, etc.) instead of mocks",
+]
+
+[tool.coverage.run]
+source = ["ubuntu_desktop_control"]
+omit = ["tests/*", "**/__pycache__/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
 ]
 
 [build-system]

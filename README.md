@@ -2,17 +2,38 @@
 
 An MCP (Model Context Protocol) server that enables LLMs to control your Ubuntu desktop by taking screenshots and sending mouse clicks. This allows AI assistants to visually interact with your desktop applications.
 
+## ⚡ NEW: Optimized Production Workflow
+
+**5x faster, 5x more accurate!** Now using the same optimization techniques as Anthropic's Computer Use API:
+
+- **📸 Smart Screenshots**: Auto-downsampled to 1280x720 (5x smaller)
+- **🎯 Numbered Elements**: See what's clickable at a glance with overlaid IDs
+- **🤖 AT-SPI Integration**: Automatic UI element detection using accessibility API
+- **📐 Percentage Coords**: Resolution-agnostic positioning (no more pixel hunting!)
+- **⚡ Workflow Batching**: Execute multiple actions in one MCP call
+- **🎪 Element Cache**: Direct element interaction - "click element #5"
+
+**Example - Old way (8+ calls, ~15s):**
+```
+take_screenshot() → analyze → grid overlay → zoom quadrant → find pixel → click → miss
+```
+
+**Example - New way (1 call, ~3s):**
+```
+take_screenshot() → "I see Pinta is element #5" → click_screen(element_id=5) → ✓
+```
+
+See [OPTIMIZATION_COMPLETE.md](OPTIMIZATION_COMPLETE.md) for full details.
+
 ## Features
 
-- 📸 **Screenshot Capture**: Take full or partial screenshots of the desktop
-- 🖱️ **Mouse Control**: Click at specific pixel coordinates (left, right, middle button)
-- ⌨️ **Keyboard Control**: Type text and press keys
-- 🖥️ **Screen Info**: Query screen dimensions and display server type
-- 🎯 **Mouse Movement**: Move cursor to specific positions with optional animation
-- 🔍 **Display Scaling Detection**: Automatically detect and report HiDPI/scaling mismatches
-- 🎛️ **Auto Coordinate Handling**: Optional auto-scaling clicks plus a converter to map screenshot pixels to click coordinates
-- 🐛 **Coordinate Debugging**: Grid overlay and quadrant tools to visualize coordinate systems
-- 📊 **Diagnostics**: Detailed scaling factor analysis, warnings, and recommendations
+- 📸 **Screenshot Capture**: Annotated screenshots with automatic element detection
+- 🔢 **Element Detection**: AT-SPI + CV fallback for robust UI element identification  
+- 🖱️ **Smart Clicking**: Click by element ID or percentage coordinates
+- ⌨️ **Keyboard Control**: Type text and press keys/hotkeys
+- 🎯 **Mouse Movement**: Smooth cursor positioning with animation
+- 🚀 **Workflow Batching**: Execute multi-step tasks in single MCP call
+- 📊 **Diagnostics**: Display scaling detection, warnings, and recommendations
 
 ## Quick Start
 
@@ -127,6 +148,7 @@ args = []
 | `get_display_diagnostics` | Troubleshoot scaling and coordinate mismatches. |
 | `screenshot_with_grid` | Capture screen with a coordinate grid overlay for precise positioning. |
 | `screenshot_quadrants` | Split screen into 4 quadrants for easier analysis of high-res displays. |
+| `map_GUI_elements_location` | Detect and map UI elements (hitboxes) using Computer Vision. |
 | `convert_screenshot_coordinates` | Convert pixels from a screenshot to logical click coordinates. |
 | `list_prompt_templates` | List available prompt templates (for clients without native prompt support). |
 
