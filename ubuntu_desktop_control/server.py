@@ -14,6 +14,7 @@ Requirements:
 import os
 import shutil
 import textwrap
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -24,6 +25,17 @@ from typing import Any, Dict, List, Optional, Tuple
 # the server can start and report a clear error to the caller.
 _pyautogui = None
 _pyautogui_error: Optional[str] = None
+
+# Default folder inside workspace to save artifacts clients can read
+_CAPTURE_DIR_NAME = "captures"
+
+
+def _default_output_dir() -> str:
+    """Return a workspace-local capture directory, creating it if missing."""
+    base = os.getcwd()
+    path = os.path.join(base, _CAPTURE_DIR_NAME)
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
 def _get_pyautogui():
@@ -84,6 +96,10 @@ def _prompt_text(template: str) -> str:
 # Cache for scaling factor detection (factor, logical size, actual size)
 _scaling_factor_cache: Optional[Tuple[float, Tuple[int, int], Tuple[int, int]]] = None
 
+# Short-term caches to avoid hammering diagnostics/screen info when clients poll aggressively
+_DIAG_CACHE: Optional[Tuple[float, Any]] = None  # (timestamp, DiagnosticInfo)
+_SCREEN_INFO_CACHE: Optional[Tuple[float, Any]] = None  # (timestamp, ScreenInfo)
+
 
 def _clamp(value: float, min_value: float, max_value: float) -> float:
     return max(min_value, min(max_value, value))
@@ -113,6 +129,91 @@ def _element_cache_to_xy(
         return int(screen_width * x_percent), int(screen_height * y_percent)
 
     return int(elem.get("x", 0)), int(elem.get("y", 0))
+
+
+def _get_cached_elements(pyautogui_module):
+    """Return element cache if screen size matches; otherwise invalidate."""
+    cache = getattr(click_screen, "_element_cache", None)
+    if not cache:
+        return None, None
+
+    try:
+        logical_w, logical_h = pyautogui_module.size()
+    except Exception:
+        logical_w, logical_h = None, None
+
+    # New-style cache has meta and elements
+    if isinstance(cache, dict) and "elements" in cache and "meta" in cache:
+        meta = cache.get("meta", {})
+        if logical_w and logical_h:
+            if meta.get("logical_width") != logical_w or meta.get("logical_height") != logical_h:
+                return None, None
+        return cache.get("elements", {}), meta
+
+    # Legacy cache: element_id -> data
+    if isinstance(cache, dict):
+        return cache, None
+
+    return None, None
+
+
+def _build_preferred_targets(
+    *,
+    elements: List["AccessibleElement"],
+    element_map: Dict[int, Dict[str, Any]],
+    logical_width: int,
+    logical_height: int,
+    limit: int = 5,
+) -> List[Dict[str, Any]]:
+    """Rank likely targets (e.g., Firefox) to enable one-shot clicks."""
+    keywords = ["firefox", "browser", "mozilla", "chrome", "web"]
+    preferred_roles = {"icon", "push button", "menu item", "list item"}
+
+    ranked: List[Tuple[float, Dict[str, Any]]] = []
+
+    for elem in elements:
+        cached = element_map.get(elem.id, {})
+        name = (cached.get("name") or elem.name or "").strip()
+        role = (cached.get("role") or elem.role or "").strip().lower()
+        lname = name.lower()
+
+        score = 0.0
+        for kw in keywords:
+            if kw in lname:
+                score += 10.0
+                if lname.startswith(kw):
+                    score += 2.0
+        if role in preferred_roles:
+            score += 3.0
+        if role and role.startswith("app"):
+            score += 1.0
+
+        x_percent = cached.get("x_percent")
+        y_percent = cached.get("y_percent")
+        if x_percent is None:
+            x_percent = _safe_percent(elem.center_x, logical_width)
+        if y_percent is None:
+            y_percent = _safe_percent(elem.center_y, logical_height)
+
+        # Slight preference for mid-sized targets
+        area = max(1, cached.get("width") or elem.width) * max(1, cached.get("height") or elem.height)
+        score += min(area / 20000.0, 5.0)
+
+        ranked.append(
+            (
+                score,
+                {
+                    "id": elem.id,
+                    "name": name,
+                    "role": role,
+                    "x_percent": x_percent,
+                    "y_percent": y_percent,
+                },
+            )
+        )
+
+    ranked.sort(key=lambda t: (-t[0], t[1]["id"]))
+    return [item for _, item in ranked[:limit] if _clamp(item["x_percent"], 0.0, 1.0) >= 0.0]
 
 
 def _detect_scaling_factor(
@@ -291,6 +392,7 @@ class GUIElementMapResult(BaseModel):
     elements: List[GUIElement] = Field(default_factory=list, description="List of detected UI elements")
     count: int = Field(description="Total number of elements detected")
     debug_image_path: Optional[str] = Field(None, description="Path to the debug image with drawn contours")
+    screenshot_path: Optional[str] = Field(None, description="Path to the screenshot used for detection")
     scaling_factor: Optional[float] = Field(None, description="Detected display scaling factor")
     warnings: Optional[List[str]] = Field(None, description="Non-fatal warnings")
     error: Optional[str] = Field(None, description="Error message if operation failed")
@@ -323,6 +425,10 @@ class AnnotatedScreenshot(BaseModel):
     actual_width: int = Field(description="Actual screen width")
     actual_height: int = Field(description="Actual screen height")
     scaling_info: str = Field(description="Explanation of coordinate scaling")
+    suggested_targets: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="Top recommended elements to click (id, name, role, x_percent, y_percent)",
+    )
     warnings: Optional[List[str]] = Field(None, description="Non-fatal warnings")
     error: Optional[str] = Field(None, description="Error message if operation failed")
 
@@ -386,7 +492,7 @@ def take_screenshot(
     Args:
         detect_elements: Whether to detect and annotate UI elements (default: True).
                         If False, returns plain downsampled screenshot.
-        output_dir: Directory for output files. Defaults to /tmp.
+        output_dir: Directory for output files. Defaults to a workspace-local 'captures' folder.
 
     Returns:
         AnnotatedScreenshot with:
@@ -421,10 +527,11 @@ def take_screenshot(
         # Logical screen dimensions (what PyAutoGUI uses for input coordinates)
         logical_width, logical_height = pyautogui.size()
         
-        # Set output directory
+        # Set output directory inside workspace so clients can read captures
         if output_dir is None:
-            output_dir = "/tmp"
-        os.makedirs(output_dir, exist_ok=True)
+            output_dir = _default_output_dir()
+        else:
+            os.makedirs(output_dir, exist_ok=True)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -690,13 +797,30 @@ def take_screenshot(
                 draw.text((x - text_width // 2, y - text_height // 2), text, 
                          fill=(255, 255, 255), font=font)
         
+        # Build suggested targets for one-shot selection (e.g., Firefox)
+        suggested_targets = None
+        if elements:
+            suggested_targets = _build_preferred_targets(
+                elements=elements,
+                element_map=element_map,
+                logical_width=logical_width,
+                logical_height=logical_height,
+            )
+
         # Save annotated screenshot
         annotated_path = os.path.join(output_dir, f"screenshot_annotated_{timestamp}.png")
         annotated.save(annotated_path)
 
-        # Cache element map for click_screen to use
+        # Cache element map for click_screen to use, with metadata for invalidation
         if element_map:
-            click_screen._element_cache = element_map
+            click_screen._element_cache = {
+                "meta": {
+                    "logical_width": logical_width,
+                    "logical_height": logical_height,
+                    "scaling_factor": scaling_factor,
+                },
+                "elements": element_map,
+            }
 
         return AnnotatedScreenshot(
             success=True,
@@ -709,6 +833,7 @@ def take_screenshot(
             actual_width=img_width,
             actual_height=img_height,
             scaling_info=scaling_info,
+            suggested_targets=suggested_targets,
             warnings=warnings or None
         )
 
@@ -875,12 +1000,9 @@ def click_screen(
     """
     Click at screen location using PERCENTAGE coordinates or element ID.
 
-    OPTIMIZED APPROACH - Use one of these methods:
-    1. Click by element ID (from take_screenshot): click_screen(element_id=5)
-    2. Click by percentage: click_screen(x_percent=0.5, y_percent=0.3)
-
-    Percentage coordinates are resolution-agnostic and work across different displays.
-    Element IDs come from numbered markers in annotated screenshots.
+    Preferred order:
+    1) element_id from take_screenshot (best accuracy)
+    2) x_percent/y_percent (resolution-agnostic fallback)
 
     Args:
         x_percent: X coordinate as percentage (0.0 = left edge, 1.0 = right edge)
@@ -908,7 +1030,120 @@ def click_screen(
             error=_pyautogui_error,
         )
 
+
+@mcp.tool()
+def click_first_match(
+    name_substring: str,
+    role_hint: Optional[str] = None,
+) -> MouseClickResult:
+    """
+    Find the best-matching cached element by name/role and click it (uses element IDs).
+
+    Intended for quick launches like "Firefox" without manual element_id lookup.
+    If no cache exists, it will call take_screenshot(detect_elements=True) once.
+    """
+    pyautogui = _get_pyautogui()
+    if pyautogui is None:
+        return MouseClickResult(
+            success=False,
+            x=0,
+            y=0,
+            button="left",
+            clicks=1,
+            error=_pyautogui_error,
+        )
+
+    if not name_substring:
+        return MouseClickResult(
+            success=False,
+            x=0,
+            y=0,
+            button="left",
+            clicks=1,
+            error="name_substring is required",
+        )
+
     warnings = _collect_env_warnings()
+
+    cached_elements, _ = _get_cached_elements(pyautogui)
+    if not cached_elements:
+        shot = take_screenshot(detect_elements=True)
+        if not shot.success:
+            return MouseClickResult(
+                success=False,
+                x=0,
+                y=0,
+                button="left",
+                clicks=1,
+                warnings=warnings or shot.warnings,
+                error=shot.error or "Failed to detect elements",
+            )
+        cached_elements, _ = _get_cached_elements(pyautogui)
+
+    if not cached_elements:
+        return MouseClickResult(
+            success=False,
+            x=0,
+            y=0,
+            button="left",
+            clicks=1,
+            warnings=warnings or None,
+            error="No elements available after screenshot; cannot match.",
+        )
+
+    target = name_substring.lower()
+    role_hint_lower = role_hint.lower() if role_hint else None
+    best_id = None
+    best_score = -1.0
+
+    for elem_id, data in cached_elements.items():
+        name = str(data.get("name") or "").lower()
+        role = str(data.get("role") or "").lower()
+
+        score = 0.0
+        if target in name:
+            score += 10.0
+            if name.startswith(target):
+                score += 2.0
+        if role_hint_lower:
+            if role == role_hint_lower:
+                score += 3.0
+            elif role_hint_lower in role:
+                score += 2.0
+
+        if score <= 0:
+            continue
+
+        score += 0.1  # small bias to break ties
+        if score > best_score:
+            best_score = score
+            best_id = elem_id
+
+    if best_id is None:
+        return MouseClickResult(
+            success=False,
+            x=0,
+            y=0,
+            button="left",
+            clicks=1,
+            warnings=warnings or None,
+            error=f"No element matched '{name_substring}'.",
+        )
+
+    result = click_screen(element_id=best_id, button="left", clicks=1)
+    if warnings:
+        if result.warnings:
+            result.warnings = list(result.warnings) + warnings
+        else:
+            result.warnings = warnings
+    return result
+
+    warnings = _collect_env_warnings()
+
+    cached_elements, cache_meta = _get_cached_elements(pyautogui)
+    cache_warning = None
+    if cache_meta is None and getattr(click_screen, "_element_cache", None) and not cached_elements:
+        cache_warning = "Element cache missing metadata; refresh with take_screenshot(detect_elements=True)."
 
     try:
         # Validate button
@@ -928,28 +1163,29 @@ def click_screen(
         
         # Determine click coordinates (logical)
         if element_id is not None:
-            # Use cached element coordinates from last screenshot
-            if not hasattr(click_screen, '_element_cache') or not getattr(click_screen, '_element_cache'):
+            if not cached_elements:
                 return MouseClickResult(
                     success=False,
                     x=0,
                     y=0,
                     button=button,
                     clicks=clicks,
-                    error="No element cache available. Take a screenshot first."
+                    warnings=warnings or None,
+                    error="No element cache available. Run take_screenshot(detect_elements=True) first.",
                 )
-            
-            if element_id not in click_screen._element_cache:
+
+            if element_id not in cached_elements:
                 return MouseClickResult(
                     success=False,
                     x=0,
                     y=0,
                     button=button,
                     clicks=clicks,
-                    error=f"Element {element_id} not found. Valid IDs: {list(click_screen._element_cache.keys())}"
+                    warnings=warnings or None,
+                    error=f"Element {element_id} not found. Valid IDs: {list(cached_elements.keys())}",
                 )
-            
-            elem = click_screen._element_cache[element_id]
+
+            elem = cached_elements[element_id]
             x, y = _element_cache_to_xy(elem=elem, screen_width=screen_width, screen_height=screen_height)
             
         elif x_percent is not None and y_percent is not None:
@@ -978,6 +1214,9 @@ def click_screen(
         
         # Perform click
         pyautogui.click(x=x, y=y, clicks=clicks, button=button)
+
+        if cache_warning:
+            warnings = (warnings or []) + [cache_warning]
 
         return MouseClickResult(
             success=True,
@@ -1020,6 +1259,14 @@ def get_screen_info() -> ScreenInfo:
     Example:
         - get_screen_info() - Returns screen dimensions and X11/Wayland info
     """
+    global _SCREEN_INFO_CACHE
+
+    # Serve cached success for a short window to avoid client polling spam
+    if _SCREEN_INFO_CACHE:
+        ts, cached = _SCREEN_INFO_CACHE
+        if time.monotonic() - ts < 2.0 and getattr(cached, "success", False):
+            return cached
+
     pyautogui = _get_pyautogui()
     if pyautogui is None:
         return ScreenInfo(
@@ -1036,7 +1283,7 @@ def get_screen_info() -> ScreenInfo:
         if scaling_warning:
             warnings.append(scaling_warning)
 
-        return ScreenInfo(
+        result = ScreenInfo(
             success=True,
             width=screen_width,
             height=screen_height,
@@ -1044,6 +1291,8 @@ def get_screen_info() -> ScreenInfo:
             scaling_factor=scaling_factor,
             warnings=warnings or None,
         )
+        _SCREEN_INFO_CACHE = (time.monotonic(), result)
+        return result
     except Exception as e:  # noqa: BLE001
         return ScreenInfo(
             success=False,
@@ -1091,6 +1340,11 @@ def move_mouse(
 
     warnings = _collect_env_warnings()
 
+    cached_elements, cache_meta = _get_cached_elements(pyautogui)
+    cache_warning = None
+    if cache_meta is None and getattr(click_screen, "_element_cache", None) and not cached_elements:
+        cache_warning = "Element cache missing metadata; refresh with take_screenshot(detect_elements=True)."
+
     x = 0
     y = 0
 
@@ -1099,27 +1353,27 @@ def move_mouse(
         
         # Determine coordinates
         if element_id is not None:
-            if not hasattr(click_screen, '_element_cache') or not getattr(click_screen, '_element_cache'):
+            if not cached_elements:
                 return MouseClickResult(
                     success=False,
                     x=0,
                     y=0,
                     button="none",
                     clicks=0,
-                    error="No element cache. Take a screenshot first."
+                    error="No element cache. Run take_screenshot(detect_elements=True) first.",
                 )
-            
-            if element_id not in click_screen._element_cache:
+
+            if element_id not in cached_elements:
                 return MouseClickResult(
                     success=False,
                     x=0,
                     y=0,
                     button="none",
                     clicks=0,
-                    error=f"Element {element_id} not found."
+                    error=f"Element {element_id} not found.",
                 )
-            
-            elem = click_screen._element_cache[element_id]
+
+            elem = cached_elements[element_id]
             x, y = _element_cache_to_xy(elem=elem, screen_width=screen_width, screen_height=screen_height)
             
         elif x_percent is not None and y_percent is not None:
@@ -1147,6 +1401,9 @@ def move_mouse(
 
         # Move mouse
         pyautogui.moveTo(x, y, duration=duration)
+
+        if cache_warning:
+            warnings = (warnings or []) + [cache_warning]
 
         return MouseClickResult(
             success=True,
@@ -1576,6 +1833,14 @@ def get_display_diagnostics() -> DiagnosticInfo:
     Returns:
         DiagnosticInfo with scaling factor, dimensions, and recommendations
     """
+    global _DIAG_CACHE
+
+    # Serve cached success briefly to prevent repeated polling from clients
+    if _DIAG_CACHE:
+        ts, cached = _DIAG_CACHE
+        if time.monotonic() - ts < 2.0 and getattr(cached, "success", False):
+            return cached
+
     pyautogui = _get_pyautogui()
     if pyautogui is None:
         return DiagnosticInfo(
@@ -1617,7 +1882,7 @@ def get_display_diagnostics() -> DiagnosticInfo:
                 f"Divide screenshot coordinates by {scaling_factor:.2f} before clicking, "
                 f"or use `convert_screenshot_coordinates` to convert screenshot pixels to logical click coordinates. "
                 f"For example: screenshot (1000, 500) -> click ({int(1000/scaling_factor)}, {int(500/scaling_factor)}). "
-                f"Alternatively, use screenshot_with_grid to visualize logical coordinates."
+                f"Alternatively, use take_screenshot(detect_elements=True) to click by element_id or by x_percent/y_percent."
             )
         else:
             recommendation = (
@@ -1625,7 +1890,7 @@ def get_display_diagnostics() -> DiagnosticInfo:
                 "screen coordinates directly."
             )
 
-        return DiagnosticInfo(
+        result = DiagnosticInfo(
             success=True,
             logical_width=logical_width,
             logical_height=logical_height,
@@ -1637,6 +1902,8 @@ def get_display_diagnostics() -> DiagnosticInfo:
             recommendation=recommendation,
             warnings=warnings or None,
         )
+        _DIAG_CACHE = (time.monotonic(), result)
+        return result
 
     except Exception as e:  # noqa: BLE001
         return DiagnosticInfo(
@@ -1744,6 +2011,9 @@ def map_GUI_elements_location(
     pyautogui = _get_pyautogui()
     warnings = _collect_env_warnings()
 
+    captured_path: Optional[str] = None
+    scaling_factor = 1.0
+
     try:
         import cv2
         import numpy as np
@@ -1759,13 +2029,25 @@ def map_GUI_elements_location(
         # 1. Get Screenshot
         if screenshot_path:
             if not os.path.exists(screenshot_path):
-                return GUIElementMapResult(success=False, elements=[], count=0, error=f"File not found: {screenshot_path}")
+                return GUIElementMapResult(
+                    success=False,
+                    elements=[],
+                    count=0,
+                    error=f"File not found: {screenshot_path}",
+                    screenshot_path=os.path.abspath(screenshot_path),
+                )
             image = cv2.imread(screenshot_path)
             if image is None:
-                return GUIElementMapResult(success=False, elements=[], count=0, error=f"Failed to load image: {screenshot_path}")
+                return GUIElementMapResult(
+                    success=False,
+                    elements=[],
+                    count=0,
+                    error=f"Failed to load image: {screenshot_path}",
+                    screenshot_path=os.path.abspath(screenshot_path),
+                )
+            captured_path = os.path.abspath(screenshot_path)
             
             # Detect scaling if possible (requires pyautogui)
-            scaling_factor = 1.0
             if pyautogui:
                 screen_width, screen_height = pyautogui.size()
                 h, w = image.shape[:2]
@@ -1778,12 +2060,27 @@ def map_GUI_elements_location(
                     warnings.append(scaling_warning)
         else:
             if pyautogui is None:
-                return GUIElementMapResult(success=False, elements=[], count=0, error=_pyautogui_error)
+                return GUIElementMapResult(
+                    success=False,
+                    elements=[],
+                    count=0,
+                    error=_pyautogui_error,
+                )
             
             # Take new screenshot
             pil_image, actual_w, actual_h, backend_warning = _get_screenshot_with_backend(pyautogui)
             if backend_warning:
                 warnings.append(backend_warning)
+
+            # Persist the captured screenshot so clients can inspect it
+            capture_dir = _default_output_dir()
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            captured_path = os.path.join(capture_dir, f"screenshot_elements_{timestamp}.png")
+            try:
+                pil_image.save(captured_path)
+            except Exception as save_exc:  # noqa: BLE001 - best-effort persistence
+                warnings.append(f"Failed to save screenshot to {captured_path}: {save_exc}")
+                captured_path = None
             
             # Convert PIL to OpenCV (RGB -> BGR)
             image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
@@ -1867,6 +2164,7 @@ def map_GUI_elements_location(
             elements=detected_elements,
             count=len(detected_elements),
             debug_image_path=saved_debug_path,
+            screenshot_path=captured_path,
             scaling_factor=scaling_factor,
             warnings=warnings or None
         )
@@ -1877,362 +2175,10 @@ def map_GUI_elements_location(
             elements=[],
             count=0,
             error=f"Detection failed: {str(e)}",
+            screenshot_path=captured_path,
             warnings=warnings or None
         )
 
-
-@mcp.tool()
-def screenshot_with_grid(
-    output_path: Optional[str] = None,
-    grid_size: int = 100
-) -> ScreenshotResult:
-    """
-    Take a screenshot with a coordinate grid overlay for debugging positioning issues.
-
-    This tool captures the screen and overlays a semi-transparent red grid with coordinate
-    labels showing LOGICAL pixel positions (the coordinates to use with click_screen).
-
-    IMPORTANT: The grid labels show the coordinates you should use directly with click_screen().
-    If scaling is active, the labels automatically account for it - just read the numbers
-    and use them as-is in click_screen(x=<value>, y=<value>).
-
-    Grid interpretation:
-    - Red grid lines: Semi-transparent, won't heavily obscure content
-    - "x=N" labels: Appear at top of vertical lines - use this X coordinate for clicking
-    - "y=N" labels: Appear at left of horizontal lines - use this Y coordinate for clicking
-    - Grid spacing: `grid_size` pixels (minimum 10, default 100)
-    - All labels are clean multiples of grid size for easy reading
-
-    If display scaling is active (e.g. 2x HiDPI), the grid automatically shows logical
-    coordinates. For example, if you see "x=500" on the grid, use click_screen(x=500)
-    regardless of the actual screenshot pixel position.
-
-    Args:
-        output_path: Optional custom path for screenshot file
-        grid_size: Distance between grid lines in pixels (minimum 10, default 100)
-
-    Returns:
-        ScreenshotResult with annotated screenshot showing coordinate grid
-        - scaling_factor: Shows if display scaling is active
-        - scaling_warning: Explains the coordinate system if scaling detected
-
-    Examples:
-        - screenshot_with_grid() - Grid at x=0,100,200... y=0,100,200...
-        - screenshot_with_grid(output_path="/tmp/debug.png") - Save to specific location
-    """
-    pyautogui = _get_pyautogui()
-    if pyautogui is None:
-        return ScreenshotResult(success=False, error=_pyautogui_error)
-
-    warnings = _collect_env_warnings()
-
-    try:
-        from PIL import ImageDraw
-
-        # Get screen size
-        screen_width, screen_height = pyautogui.size()
-
-        # Take screenshot (fastest backend)
-        screenshot, actual_width, actual_height, backend_warning = _get_screenshot_with_backend(pyautogui)
-        if backend_warning:
-            warnings.append(backend_warning)
-
-        # Detect scaling
-        scaling_factor, scaling_warning = _detect_scaling_factor(
-            pyautogui,
-            logical_size=(screen_width, screen_height),
-            actual_size=(actual_width, actual_height),
-        )
-        if scaling_warning:
-            warnings.append(scaling_warning)
-
-        # Create a drawing context
-        draw = ImageDraw.Draw(screenshot)
-
-        # Honor grid_size, clamp to sensible minimum
-        increment = max(10, grid_size)
-
-        # Calculate logical screen dimensions
-        logical_width = int(actual_width / scaling_factor) if scaling_factor else actual_width
-        logical_height = int(actual_height / scaling_factor) if scaling_factor else actual_height
-
-        # Draw vertical grid lines at clean multiples (x=0, increment, 2*increment, ...)
-        x_positions = []
-        logical_x = 0
-        while logical_x <= logical_width:
-            x = int(logical_x * scaling_factor) if scaling_factor else logical_x
-            x_positions.append((x, logical_x))
-            logical_x += increment
-
-        # Always add the right edge
-        if x_positions and x_positions[-1][0] != actual_width - 1:
-            x_positions.append((actual_width - 1, logical_width - 1))
-
-        for x, logical_x in x_positions:
-            draw.line([(x, 0), (x, actual_height - 1)], fill=(255, 0, 0, 64), width=1)
-            text = f"x={logical_x}"
-            text_bbox = draw.textbbox((x + 2, 2), text)
-            draw.rectangle(text_bbox, fill=(0, 0, 0, 120))
-            draw.text((x + 2, 2), text, fill=(255, 120, 120))
-
-        # Draw horizontal grid lines at clean multiples (y=0, increment, 2*increment, ...)
-        y_positions = []
-        logical_y = 0
-        while logical_y <= logical_height:
-            y = int(logical_y * scaling_factor) if scaling_factor else logical_y
-            y_positions.append((y, logical_y))
-            logical_y += increment
-
-        # Always add the bottom edge
-        if y_positions and y_positions[-1][0] != actual_height - 1:
-            y_positions.append((actual_height - 1, logical_height - 1))
-
-        for y, logical_y in y_positions:
-            draw.line([(0, y), (actual_width - 1, y)], fill=(255, 0, 0, 64), width=1)
-            text = f"y={logical_y}"
-            text_bbox = draw.textbbox((2, y + 2), text)
-            draw.rectangle(text_bbox, fill=(0, 0, 0, 120))
-            draw.text((2, y + 2), text, fill=(255, 120, 120))
-
-        # Generate output path if not provided
-        if output_path is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_path = f"/tmp/screenshot_grid_{timestamp}.png"
-
-        # Ensure output directory exists
-        output_dir = os.path.dirname(output_path)
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
-
-        # Save annotated screenshot
-        screenshot.save(output_path)
-
-        return ScreenshotResult(
-            success=True,
-            file_path=output_path,
-            width=screen_width,
-            height=screen_height,
-            actual_width=actual_width,
-            actual_height=actual_height,
-            scaling_factor=scaling_factor,
-            scaling_warning=scaling_warning,
-            warnings=warnings or None,
-        )
-
-    except ImportError:
-        return ScreenshotResult(
-            success=False,
-            error="PIL (Pillow) not available for drawing grid overlay",
-            warnings=warnings or None,
-        )
-    except Exception as e:  # noqa: BLE001
-        return ScreenshotResult(
-            success=False,
-            error=f"Screenshot with grid failed: {str(e)}",
-            warnings=warnings or None,
-        )
-
-
-@mcp.tool()
-def screenshot_quadrants(
-    output_dir: Optional[str] = None,
-    grid_size: int = 100
-) -> QuadrantScreenshotResult:
-    """
-    Take a screenshot and split it into 4 quadrant images for better LLM analysis.
-
-    This tool solves the problem of high-resolution displays being difficult for LLMs to
-    analyze by splitting one large screenshot into 4 smaller, more detailed quadrant views.
-    Each quadrant has a semi-transparent coordinate grid showing the FULL SCREEN coordinates,
-    making it easy to identify click positions across the entire display.
-
-    WHY USE THIS:
-    - High-res displays (2560x1440+) are hard for vision models to analyze in detail
-    - 4 smaller images provide better "pixel density" for OCR and icon recognition
-    - Each quadrant maintains absolute screen coordinates for accurate clicking
-    - Transparent grid overlays don't obscure content
-
-    QUADRANT LAYOUT:
-    ┌─────────────┬─────────────┐
-    │  top_left   │  top_right  │
-    │  (x: 0→mid) │  (x: mid→max│
-    │  (y: 0→mid) │  (y: 0→mid) │
-    ├─────────────┼─────────────┤
-    │ bottom_left │bottom_right │
-    │  (x: 0→mid) │  (x: mid→max│
-    │  (y: mid→max│  (y: mid→max│
-    └─────────────┴─────────────┘
-
-    COORDINATE SYSTEM:
-    All grid labels show FULL SCREEN logical coordinates. If you see "x=1500" in the
-    top_right quadrant, use click_screen(x=1500) directly - no math needed!
-
-    Args:
-        output_dir: Directory to save quadrant images. Defaults to /tmp
-        grid_size: Distance between grid lines in pixels (minimum 10, default 100)
-
-    Returns:
-        QuadrantScreenshotResult with paths to all 4 quadrant images plus full screenshot
-        - Each quadrant image is 1/4 the resolution (easier for LLM vision)
-        - Grid labels show absolute screen coordinates at your chosen increment
-        - scaling_factor indicates if HiDPI scaling is active
-
-    Examples:
-        - screenshot_quadrants() - Save to /tmp with 100px grid
-        - screenshot_quadrants(output_dir="/home/user/Desktop", grid_size=50) - Finer grid
-
-    USAGE TIP: After calling this tool, analyze each quadrant image to find UI elements.
-    The grid coordinates work directly with click_screen() - no conversion needed!
-    """
-    pyautogui = _get_pyautogui()
-    if pyautogui is None:
-        return QuadrantScreenshotResult(success=False, error=_pyautogui_error)
-
-    warnings = _collect_env_warnings()
-
-    try:
-        from PIL import ImageDraw
-
-        # Get screen info
-        screen_width, screen_height = pyautogui.size()
-        screenshot, actual_width, actual_height, backend_warning = _get_screenshot_with_backend(pyautogui)
-        if backend_warning:
-            warnings.append(backend_warning)
-
-        scaling_factor, scaling_warning = _detect_scaling_factor(
-            pyautogui,
-            logical_size=(screen_width, screen_height),
-            actual_size=(actual_width, actual_height),
-        )
-        if scaling_warning:
-            warnings.append(scaling_warning)
-
-        # Set output directory
-        if output_dir is None:
-            output_dir = "/tmp"
-
-        # Ensure output directory exists
-        os.makedirs(output_dir, exist_ok=True)
-
-        # Generate timestamp for unique filenames
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        # Save full screenshot
-        full_path = os.path.join(output_dir, f"screenshot_full_{timestamp}.png")
-        screenshot.save(full_path)
-
-        # Calculate midpoints
-        mid_x_actual = actual_width // 2
-        mid_y_actual = actual_height // 2
-        mid_x_logical = screen_width // 2
-        mid_y_logical = screen_height // 2
-
-        # Define quadrants (in screenshot pixel coordinates)
-        quadrants = {
-            'top_left': (0, 0, mid_x_actual, mid_y_actual, 0, 0, mid_x_logical, mid_y_logical),
-            'top_right': (mid_x_actual, 0, actual_width, mid_y_actual, mid_x_logical, 0, screen_width, mid_y_logical),
-            'bottom_left': (0, mid_y_actual, mid_x_actual, actual_height, 0, mid_y_logical, mid_x_logical, screen_height),
-            'bottom_right': (mid_x_actual, mid_y_actual, actual_width, actual_height, mid_x_logical, mid_y_logical, screen_width, screen_height)
-        }
-
-        quadrant_paths = {}
-
-        increment = max(10, grid_size)
-
-        # Process each quadrant
-        for name, (x1, y1, x2, y2, log_x1, log_y1, log_x2, log_y2) in quadrants.items():
-            quadrant_img = screenshot.crop((x1, y1, x2, y2))
-            draw = ImageDraw.Draw(quadrant_img)
-
-            quad_width, quad_height = quadrant_img.size
-
-            # Vertical grid lines
-            x_positions = []
-            start_logical_x = (log_x1 // increment) * increment
-            if start_logical_x < log_x1:
-                start_logical_x += increment
-
-            logical_x = start_logical_x
-            while logical_x <= log_x2:
-                actual_x_on_screen = int(logical_x * scaling_factor) if scaling_factor else logical_x
-                x = actual_x_on_screen - x1
-                if 0 <= x < quad_width:
-                    x_positions.append((x, logical_x))
-                logical_x += increment
-
-            edge_x = quad_width - 1
-            edge_logical_x = int((x1 + edge_x) / scaling_factor) if scaling_factor else (x1 + edge_x)
-            if not x_positions or x_positions[-1][0] != edge_x:
-                x_positions.append((edge_x, edge_logical_x))
-
-            for x, logical_x in x_positions:
-                draw.line([(x, 0), (x, quad_height - 1)], fill=(255, 0, 0, 50), width=1)
-                text = f"x={logical_x}"
-                text_bbox = draw.textbbox((x + 2, 2), text)
-                draw.rectangle(text_bbox, fill=(0, 0, 0, 120))
-                draw.text((x + 2, 2), text, fill=(255, 120, 120))
-
-            # Horizontal grid lines
-            y_positions = []
-            start_logical_y = (log_y1 // increment) * increment
-            if start_logical_y < log_y1:
-                start_logical_y += increment
-
-            logical_y = start_logical_y
-            while logical_y <= log_y2:
-                actual_y_on_screen = int(logical_y * scaling_factor) if scaling_factor else logical_y
-                y = actual_y_on_screen - y1
-                if 0 <= y < quad_height:
-                    y_positions.append((y, logical_y))
-                logical_y += increment
-
-            edge_y = quad_height - 1
-            edge_logical_y = int((y1 + edge_y) / scaling_factor) if scaling_factor else (y1 + edge_y)
-            if not y_positions or y_positions[-1][0] != edge_y:
-                y_positions.append((edge_y, edge_logical_y))
-
-            for y, logical_y in y_positions:
-                draw.line([(0, y), (quad_width - 1, y)], fill=(255, 0, 0, 50), width=1)
-                text = f"y={logical_y}"
-                text_bbox = draw.textbbox((2, y + 2), text)
-                draw.rectangle(text_bbox, fill=(0, 0, 0, 120))
-                draw.text((2, y + 2), text, fill=(255, 120, 120))
-
-            quadrant_path = os.path.join(output_dir, f"screenshot_{name}_{timestamp}.png")
-            quadrant_img.save(quadrant_path)
-            quadrant_paths[name] = quadrant_path
-
-        sf_str = f"{scaling_factor:.2f}" if scaling_factor is not None else "1.00"
-        quadrant_info = (
-            f"Screen split at logical coordinates: x={mid_x_logical}, y={mid_y_logical}. "
-            f"Grid labels show FULL SCREEN coordinates - use values directly with click_screen(). "
-            f"Scaling factor: {sf_str}x, grid every {increment}px."
-        )
-
-        return QuadrantScreenshotResult(
-            success=True,
-            full_screenshot_path=full_path,
-            top_left_path=quadrant_paths['top_left'],
-            top_right_path=quadrant_paths['top_right'],
-            bottom_left_path=quadrant_paths['bottom_left'],
-            bottom_right_path=quadrant_paths['bottom_right'],
-            scaling_factor=scaling_factor,
-            quadrant_info=quadrant_info,
-            warnings=warnings or None,
-        )
-
-    except ImportError:
-        return QuadrantScreenshotResult(
-            success=False,
-            error="PIL (Pillow) not available for image processing",
-            warnings=warnings or None,
-        )
-    except Exception as e:  # noqa: BLE001
-        return QuadrantScreenshotResult(
-            success=False,
-            error=f"Quadrant screenshot failed: {str(e)}",
-            warnings=warnings or None,
-        )
 
 
 # MCP prompt templates
@@ -2251,7 +2197,6 @@ def prompt_baseline_display_check(task_hint: Optional[str] = None) -> str:
         Before working on {target}, call `get_screen_info` and `get_display_diagnostics`.
         Report display_server, logical size (width/height), scaling_factor, and any warnings.
         Prefer clicking by element ID from `take_screenshot` or by percentage with `click_screen(x_percent=..., y_percent=...)`.
-        If you need exact logical coordinates for debugging, use `screenshot_with_grid`.
         """
     )
 
@@ -2271,7 +2216,7 @@ def prompt_capture_full_desktop(
         f"""
         Goal: {goal}. Call `take_screenshot(detect_elements=True)` (use {path_hint}).
         Return screenshot_path, original_path, display_width/height, actual_width/height, and any warnings.
-        List 2-3 concise observations relevant to the goal and suggest a next step (click by element_id, click by percentage, or a diagnostic grid/quadrant capture).
+        List 2-3 concise observations relevant to the goal and suggest a next step (click by element_id or click by percentage).
         """
     )
 
@@ -2294,50 +2239,6 @@ def prompt_capture_region_for_task(
         Goal: {goal_text}. Call `take_screenshot(detect_elements=True)` ({path_hint}).
         Focus your analysis on region '{region}' (descriptive guidance; `take_screenshot` currently captures the full screen).
         Return screenshot_path, any warnings, and a short summary of what is visible in that region.
-        """
-    )
-
-
-@mcp.prompt(
-    name="grid_overlay_snapshot",
-    title="Grid overlay screenshot for coordinates",
-    description="Capture a grid-annotated screenshot to make click coordinates explicit.",
-)
-def prompt_grid_overlay_snapshot(
-    goal: str,
-    grid_size: Optional[int] = None,
-    output_path: Optional[str] = None,
-) -> str:
-    """Prompt template for grid overlay capture."""
-    grid_hint = f"grid_size={grid_size}" if grid_size is not None else "the default grid size"
-    path_hint = f"output_path={output_path}" if output_path else "the default output path"
-    return _prompt_text(
-        f"""
-        Goal: {goal}. Call `screenshot_with_grid` using {grid_hint} and {path_hint}.
-        Return file_path, scaling_factor/warnings, and remind that grid labels are logical coordinates for `click_screen`.
-        If the target is visible, list 1-3 candidate logical coordinates to click.
-        """
-    )
-
-
-@mcp.prompt(
-    name="quadrant_scan",
-    title="Quadrant scan for high-resolution UIs",
-    description="Split the screen into grid-labeled quadrants to inspect dense interfaces and plan clicks.",
-)
-def prompt_quadrant_scan(
-    goal: str,
-    grid_size: Optional[int] = None,
-    output_dir: Optional[str] = None,
-) -> str:
-    """Prompt template for quadrant-based inspection."""
-    grid_hint = f"grid_size={grid_size}" if grid_size is not None else "the default grid size"
-    dir_hint = f"output_dir={output_dir}" if output_dir else "the default directory"
-    return _prompt_text(
-        f"""
-        Goal: {goal}. Call `screenshot_quadrants` using {grid_hint} and {dir_hint}.
-        Return full_screenshot_path plus quadrant paths, scaling_factor/warnings, and note that grid labels are full-screen logical coordinates.
-        Point out which quadrant likely contains the target and propose exact logical coordinates to click or hover.
         """
     )
 
@@ -2382,7 +2283,6 @@ def prompt_safe_click(
         f"""
         Reason: {rationale}. Prepare to click at ({x}, {y}) using button={button} and clicks={clicks}.
         If coordinate_source is 'screenshot', first convert with `convert_screenshot_coordinates` to get logical_x/logical_y.
-        If unsure, grab a quick `screenshot_with_grid` first and ask for confirmation.
         Call `click_screen` accordingly and return success, applied_scaling, and any warnings.
         Suggest taking a follow-up screenshot if verification is needed.
         """
@@ -2434,8 +2334,8 @@ def prompt_coordinate_mismatch_recovery(
     return _prompt_text(
         f"""
         You attempted to click {target_description} at {click_text} and it missed (offset: {offset_text}).
-        Run `get_display_diagnostics` to confirm scaling, then capture `screenshot_with_grid` to anchor logical coordinates.
-        If the intended spot is visible, propose corrected logical coords and the exact `click_screen` call.
+        Run `get_display_diagnostics` to confirm scaling, then call `take_screenshot(detect_elements=True)` and work with element IDs or x_percent/y_percent.
+        If the intended spot is visible, propose corrected percentage coords and the exact `click_screen` call.
         Keep safety first and suggest reconfirming with a quick screenshot after the next attempt.
         """
     )
@@ -2456,10 +2356,10 @@ def prompt_end_to_end_capture_and_act(
     dir_hint = f"output_dir={output_dir}" if output_dir else "the default directory"
     return _prompt_text(
         f"""
-        Goal: {goal}. 1) Capture context with `screenshot_quadrants` ({dir_hint}); if the UI is simple, `take_screenshot` is fine.
-        2) Identify the control described by {hint_text}, selecting precise logical coordinates (use `convert_screenshot_coordinates` if starting from screenshot pixels).
+        Goal: {goal}. 1) Capture context with `take_screenshot(detect_elements=True)` ({dir_hint}).
+        2) Identify the control described by {hint_text}, selecting precise percentage coordinates (use `convert_screenshot_coordinates` if starting from screenshot pixels).
         3) Provide the exact `click_screen` call (prefer element_id or percentage coordinates) and flag any risks.
-        4) Recommend a quick verification capture (grid or regular screenshot) after the action.
+        4) Recommend a quick verification capture after the action.
         """
     )
 
@@ -2476,14 +2376,6 @@ _PROMPT_TEMPLATE_META: Dict[str, Dict[str, str]] = {
     "capture_region_for_task": {
         "title": "Capture region screenshot",
         "description": "Grab a focused region screenshot to inspect a specific UI area.",
-    },
-    "grid_overlay_snapshot": {
-        "title": "Grid overlay screenshot for coordinates",
-        "description": "Capture a grid-annotated screenshot to make click coordinates explicit.",
-    },
-    "quadrant_scan": {
-        "title": "Quadrant scan for high-resolution UIs",
-        "description": "Split the screen into grid-labeled quadrants to inspect dense interfaces and plan clicks.",
     },
     "convert_screenshot_coordinates": {
         "title": "Convert screenshot pixels to logical click coords",
@@ -2567,46 +2459,6 @@ def render_prompt_capture_region_for_task(
             region=region,
             goal=goal,
             output_path=output_path,
-        ),
-    )
-
-
-# @mcp.tool()
-def render_prompt_grid_overlay_snapshot(
-    goal: str,
-    grid_size: Optional[int] = None,
-    output_path: Optional[str] = None,
-) -> PromptTemplateResult:
-    """Expose grid overlay prompt as a tool."""
-    meta = _PROMPT_TEMPLATE_META["grid_overlay_snapshot"]
-    return PromptTemplateResult(
-        name="grid_overlay_snapshot",
-        title=meta["title"],
-        description=meta["description"],
-        prompt=prompt_grid_overlay_snapshot(
-            goal=goal,
-            grid_size=grid_size,
-            output_path=output_path,
-        ),
-    )
-
-
-# @mcp.tool()
-def render_prompt_quadrant_scan(
-    goal: str,
-    grid_size: Optional[int] = None,
-    output_dir: Optional[str] = None,
-) -> PromptTemplateResult:
-    """Expose quadrant scan prompt as a tool."""
-    meta = _PROMPT_TEMPLATE_META["quadrant_scan"]
-    return PromptTemplateResult(
-        name="quadrant_scan",
-        title=meta["title"],
-        description=meta["description"],
-        prompt=prompt_quadrant_scan(
-            goal=goal,
-            grid_size=grid_size,
-            output_dir=output_dir,
         ),
     )
 
