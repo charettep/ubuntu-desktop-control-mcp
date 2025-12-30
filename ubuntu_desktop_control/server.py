@@ -29,6 +29,10 @@ _pyautogui_error: Optional[str] = None
 # Default folder inside workspace to save artifacts clients can read
 _CAPTURE_DIR_NAME = "captures"
 
+# Element cache (invalidated by TTL or focus change)
+_ELEMENT_CACHE: Optional[Dict[str, Any]] = None
+_ELEMENT_CACHE_TTL = 5.0
+
 
 def _default_output_dir() -> str:
     """Return a workspace-local capture directory, creating it if missing."""
@@ -111,11 +115,170 @@ def _safe_percent(numerator: float, denominator: float) -> float:
     return _clamp(numerator / denominator, 0.0, 1.0)
 
 
+def _prefer_atspi_actions() -> bool:
+    """Return True when AT-SPI action clicks should be attempted."""
+    raw = os.environ.get("UDC_FORCE_COORDS", "").strip().lower()
+    return raw not in {"1", "true", "yes"}
+
+
+def _get_active_app_name() -> Optional[str]:
+    """Best-effort active application name for cache invalidation."""
+    try:
+        import pyatspi
+
+        desktop = pyatspi.Registry.getDesktop(0)
+        for i in range(desktop.childCount):
+            try:
+                app = desktop.getChildAtIndex(i)
+                state = app.getState()
+                if state.contains(pyatspi.STATE_ACTIVE) or state.contains(pyatspi.STATE_FOCUSED):
+                    name = getattr(app, "name", None)
+                    return name or "active-app"
+            except Exception:
+                continue
+    except Exception:
+        return None
+    return None
+
+
+def _resolve_atspi_path(path: List[int]):
+    """Resolve an AT-SPI element from a desktop path."""
+    import pyatspi
+
+    desktop = pyatspi.Registry.getDesktop(0)
+    node = desktop
+    for idx in path:
+        node = node.getChildAtIndex(idx)
+    return node
+
+
+def _attempt_atspi_action(
+    element_data: Dict[str, Any],
+    clicks: int,
+) -> Tuple[bool, Optional[str]]:
+    """Attempt to click via AT-SPI action interface. Returns success, warning."""
+    if not _prefer_atspi_actions():
+        return False, "AT-SPI action disabled via UDC_FORCE_COORDS"
+
+    path = element_data.get("atspi_path")
+    if not path:
+        return False, "No AT-SPI path available for element"
+
+    try:
+        import pyatspi
+    except Exception as exc:
+        return False, f"AT-SPI unavailable: {exc}"
+
+    try:
+        node = _resolve_atspi_path(path)
+    except Exception as exc:
+        return False, f"AT-SPI path no longer valid: {exc}"
+
+    try:
+        state = node.getState()
+        if state.contains(pyatspi.STATE_DEFUNCT):
+            return False, "AT-SPI element defunct"
+    except Exception:
+        pass
+
+    action = getattr(node, "action", None)
+    if action:
+        try:
+            action_count = action.nActions
+            action_index = None
+            preferred = {"click", "press", "activate", "open"}
+            for i in range(action_count):
+                name = action.getName(i).lower()
+                if name in preferred:
+                    action_index = i
+                    break
+            if action_index is None and action_count > 0:
+                action_index = 0
+            if action_index is not None:
+                for _ in range(max(1, clicks)):
+                    action.doAction(action_index)
+                return True, f"AT-SPI action '{action.getName(action_index)}' executed"
+        except Exception as exc:
+            return False, f"AT-SPI action failed: {exc}"
+
+    component = getattr(node, "component", None)
+    if component:
+        try:
+            component.grabFocus()
+            return True, "AT-SPI focus set (no action interface)"
+        except Exception as exc:
+            return False, f"AT-SPI focus failed: {exc}"
+
+    return False, "AT-SPI action interface not available"
+
+
+def _get_mss_monitors() -> Tuple[Optional[List[Dict[str, int]]], Optional[str]]:
+    """Return mss monitor list and optional warning."""
+    try:
+        import mss  # type: ignore
+
+        with mss.mss() as sct:
+            return list(sct.monitors), None
+    except Exception as exc:  # noqa: BLE001
+        return None, f"mss monitor query failed: {exc}"
+
+
+def _get_monitor_geometry(
+    monitor_index: Optional[int],
+    pyautogui_module=None,
+) -> Tuple[Optional[Dict[str, int]], Optional[str]]:
+    """Return logical monitor geometry for the given 0-based index."""
+    if monitor_index is None:
+        return None, None
+
+    monitors, warning = _get_mss_monitors()
+    if not monitors:
+        return None, warning or "Monitor info unavailable"
+
+    mss_index = monitor_index + 1
+    if mss_index >= len(monitors):
+        return None, f"Monitor index {monitor_index} out of range"
+
+    bounds = dict(monitors[mss_index])
+    if pyautogui_module is not None:
+        try:
+            logical_w, logical_h = pyautogui_module.size()
+            physical_full = _get_fullscreen_physical_size()
+            if physical_full:
+                scaling_factor, scaling_warning = _detect_scaling_factor(
+                    pyautogui_module,
+                    logical_size=(logical_w, logical_h),
+                    actual_size=physical_full,
+                )
+                if scaling_warning:
+                    warning = f"{warning}; {scaling_warning}" if warning else scaling_warning
+                if scaling_factor not in (None, 0, 1.0):
+                    bounds = {
+                        "left": int(bounds["left"] / scaling_factor),
+                        "top": int(bounds["top"] / scaling_factor),
+                        "width": int(bounds["width"] / scaling_factor),
+                        "height": int(bounds["height"] / scaling_factor),
+                    }
+        except Exception:
+            pass
+
+    return bounds, warning
+
+
+def _get_fullscreen_physical_size() -> Optional[Tuple[int, int]]:
+    monitors, _ = _get_mss_monitors()
+    if monitors:
+        full = monitors[0]
+        return full["width"], full["height"]
+    return None
+
+
 def _element_cache_to_xy(
     *,
     elem: Dict[str, Any],
     screen_width: int,
     screen_height: int,
+    monitor_bounds: Optional[Dict[str, int]] = None,
 ) -> Tuple[int, int]:
     """Resolve a cached element to logical (x, y) click coordinates.
 
@@ -126,6 +289,12 @@ def _element_cache_to_xy(
         y_percent = float(elem["y_percent"])
         x_percent = _clamp(x_percent, 0.0, 1.0)
         y_percent = _clamp(y_percent, 0.0, 1.0)
+        if monitor_bounds:
+            left = monitor_bounds["left"]
+            top = monitor_bounds["top"]
+            width = monitor_bounds["width"]
+            height = monitor_bounds["height"]
+            return int(left + width * x_percent), int(top + height * y_percent)
         return int(screen_width * x_percent), int(screen_height * y_percent)
 
     return int(elem.get("x", 0)), int(elem.get("y", 0))
@@ -133,8 +302,15 @@ def _element_cache_to_xy(
 
 def _get_cached_elements(pyautogui_module):
     """Return element cache if screen size matches; otherwise invalidate."""
-    cache = getattr(click_screen, "_element_cache", None)
+    global _ELEMENT_CACHE
+
+    cache = _ELEMENT_CACHE
     if not cache:
+        return None, None
+
+    captured_at = cache.get("captured_at")
+    if captured_at is None or time.monotonic() - captured_at > _ELEMENT_CACHE_TTL:
+        _ELEMENT_CACHE = None
         return None, None
 
     try:
@@ -147,7 +323,13 @@ def _get_cached_elements(pyautogui_module):
         meta = cache.get("meta", {})
         if logical_w and logical_h:
             if meta.get("logical_width") != logical_w or meta.get("logical_height") != logical_h:
+                _ELEMENT_CACHE = None
                 return None, None
+        active_app = _get_active_app_name()
+        cached_app = meta.get("active_app_name")
+        if active_app and cached_app and active_app != cached_app:
+            _ELEMENT_CACHE = None
+            return None, None
         return cache.get("elements", {}), meta
 
     # Legacy cache: element_id -> data
@@ -263,21 +445,28 @@ def _detect_scaling_factor(
         return 1.0, f"Scaling detection failed; assuming 1.0x: {exc}"
 
 
-def _get_screenshot_with_backend(pyautogui_module):
+def _get_screenshot_with_backend(pyautogui_module, monitor_index: Optional[int] = None):
     """
     Capture a screenshot using mss if available (faster), else fall back to PyAutoGUI.
 
-    Returns (image, width, height, warning)
+    Returns (image, width, height, warning, origin)
     """
     try:
         import mss  # type: ignore
         from PIL import Image
 
         with mss.mss() as sct:
-            monitor = sct.monitors[0]
+            if monitor_index is not None:
+                mss_index = monitor_index + 1
+                if mss_index >= len(sct.monitors):
+                    return None, 0, 0, f"Monitor index {monitor_index} out of range", None
+                monitor = sct.monitors[mss_index]
+            else:
+                monitor = sct.monitors[0]
             raw = sct.grab(monitor)
             img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
-            return img, raw.width, raw.height, None
+            origin = {"left": monitor["left"], "top": monitor["top"]}
+            return img, raw.width, raw.height, None, origin
     except Exception as exc:  # noqa: BLE001
         warning = None
         if "mss" in str(exc).lower():
@@ -285,7 +474,7 @@ def _get_screenshot_with_backend(pyautogui_module):
 
     image = pyautogui_module.screenshot()
     width, height = image.size
-    return image, width, height, warning
+    return image, width, height, warning, {"left": 0, "top": 0}
 
 
 class ScreenshotResult(BaseModel):
@@ -329,6 +518,7 @@ class ScreenInfo(BaseModel):
     height: Optional[int] = Field(None, description="Screen height in pixels")
     display_server: str = Field(description="Display server type (X11 or Wayland)")
     scaling_factor: Optional[float] = Field(None, description="Detected display scaling factor (1.0 = no scaling)")
+    monitors: Optional[List[Dict[str, int]]] = Field(None, description="Monitor list from mss (index 0 is virtual screen)")
     warnings: Optional[List[str]] = Field(None, description="Non-fatal warnings about environment or scaling")
     error: Optional[str] = Field(None, description="Error message if operation failed")
 
@@ -394,6 +584,7 @@ class GUIElementMapResult(BaseModel):
     debug_image_path: Optional[str] = Field(None, description="Path to the debug image with drawn contours")
     screenshot_path: Optional[str] = Field(None, description="Path to the screenshot used for detection")
     scaling_factor: Optional[float] = Field(None, description="Detected display scaling factor")
+    coordinates: Optional[str] = Field(None, description="Coordinate space for x/y (logical or physical)")
     warnings: Optional[List[str]] = Field(None, description="Non-fatal warnings")
     error: Optional[str] = Field(None, description="Error message if operation failed")
 
@@ -424,6 +615,8 @@ class AnnotatedScreenshot(BaseModel):
     display_height: int = Field(description="Height used for display (downsampled)")
     actual_width: int = Field(description="Actual screen width")
     actual_height: int = Field(description="Actual screen height")
+    monitor_index: Optional[int] = Field(None, description="Monitor index used for capture (0-based)")
+    monitor_origin: Optional[Dict[str, int]] = Field(None, description="Physical origin for monitor capture")
     scaling_info: str = Field(description="Explanation of coordinate scaling")
     suggested_targets: Optional[List[Dict[str, Any]]] = Field(
         None,
@@ -442,6 +635,7 @@ class WorkflowAction(BaseModel):
     text: Optional[str] = Field(None, description="Text to type")
     duration: Optional[float] = Field(None, description="Wait duration or animation duration")
     button: Optional[str] = Field(None, description="Mouse button: left, right, middle")
+    monitor_index: Optional[int] = Field(None, description="Monitor index (0-based) for clicks/moves/screenshot")
 
 
 class WorkflowResult(BaseModel):
@@ -476,7 +670,8 @@ class PromptTemplatesResult(BaseModel):
 @mcp.tool()
 def take_screenshot(
     detect_elements: bool = True,
-    output_dir: Optional[str] = None
+    output_dir: Optional[str] = None,
+    monitor_index: Optional[int] = None,
 ) -> AnnotatedScreenshot:
     """
     Take an annotated screenshot with automatic element detection and downsampling.
@@ -535,16 +730,37 @@ def take_screenshot(
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+        monitor_bounds, monitor_warning = _get_monitor_geometry(monitor_index, pyautogui_module=pyautogui)
+        if monitor_warning:
+            warnings.append(monitor_warning)
+
         # Capture full-resolution screenshot (physical pixels)
-        screenshot, img_width, img_height, backend_warning = _get_screenshot_with_backend(pyautogui)
+        screenshot, img_width, img_height, backend_warning, origin = _get_screenshot_with_backend(
+            pyautogui,
+            monitor_index=monitor_index,
+        )
+        if screenshot is None:
+            raise RuntimeError("Screenshot capture failed")
         if backend_warning:
             warnings.append(backend_warning)
 
-        scaling_factor, scaling_warning = _detect_scaling_factor(
-            pyautogui,
-            logical_size=(logical_width, logical_height),
-            actual_size=(img_width, img_height),
-        )
+        if monitor_index is None:
+            scaling_factor, scaling_warning = _detect_scaling_factor(
+                pyautogui,
+                logical_size=(logical_width, logical_height),
+                actual_size=(img_width, img_height),
+            )
+        else:
+            logical_full = (logical_width, logical_height)
+            physical_full = _get_fullscreen_physical_size()
+            if physical_full:
+                scaling_factor, scaling_warning = _detect_scaling_factor(
+                    pyautogui,
+                    logical_size=logical_full,
+                    actual_size=physical_full,
+                )
+            else:
+                scaling_factor, scaling_warning = 1.0, "Scaling detection skipped for per-monitor capture"
         if scaling_warning:
             warnings.append(scaling_warning)
         
@@ -591,16 +807,18 @@ def take_screenshot(
                     for i in range(desktop.childCount):
                         try:
                             app = desktop.getChildAtIndex(i)
-                            extract_elements(app, depth=0)
+                            extract_elements(app, depth=0, path=[i])
                         except Exception:
                             continue
 
                 element_id = 1
                 
-                def extract_elements(node, depth: int = 0, max_depth: int = 10):
+                def extract_elements(node, depth: int = 0, max_depth: int = 10, path: Optional[List[int]] = None):
                     nonlocal element_id
                     if depth > max_depth or element_id > 50:  # Limit to 50 elements
                         return
+                    if path is None:
+                        path = []
 
                     # Get element info defensively (do not break recursion if one property fails)
                     try:
@@ -665,6 +883,14 @@ def take_screenshot(
                                             logical_w = 0
                                             logical_h = 0
 
+                                        if monitor_bounds:
+                                            left = monitor_bounds["left"]
+                                            top = monitor_bounds["top"]
+                                            width = monitor_bounds["width"]
+                                            height = monitor_bounds["height"]
+                                            if not (left <= ext.x <= left + width and top <= ext.y <= top + height):
+                                                logical_center_x = -1
+                                                logical_center_y = -1
                                         if 0 <= logical_center_x <= logical_width and 0 <= logical_center_y <= logical_height:
                                             x_percent = _safe_percent(logical_center_x, logical_width)
                                             y_percent = _safe_percent(logical_center_y, logical_height)
@@ -699,6 +925,7 @@ def take_screenshot(
                                                 "role": role,
                                                 "x_percent": x_percent,
                                                 "y_percent": y_percent,
+                                                "atspi_path": path + [],
                                             }
                                             element_id += 1
                         except Exception:
@@ -712,7 +939,7 @@ def take_screenshot(
                     for i in range(child_count):
                         try:
                             child = node.getChildAtIndex(i)
-                            extract_elements(child, depth + 1)
+                            extract_elements(child, depth + 1, path + [i])
                         except Exception:
                             continue
                 
@@ -758,6 +985,8 @@ def take_screenshot(
                     logical_width,
                     logical_height,
                 )
+            if isinstance(element_map, dict) and element_map.get("_warning"):
+                warnings.append(element_map.pop("_warning"))
         
         # Create annotated version with numbered markers
         annotated = downsampled.copy()
@@ -813,13 +1042,18 @@ def take_screenshot(
 
         # Cache element map for click_screen to use, with metadata for invalidation
         if element_map:
-            click_screen._element_cache = {
+            global _ELEMENT_CACHE
+            _ELEMENT_CACHE = {
                 "meta": {
                     "logical_width": logical_width,
                     "logical_height": logical_height,
                     "scaling_factor": scaling_factor,
+                    "active_app_name": _get_active_app_name(),
+                    "monitor_index": monitor_index,
+                    "monitor_origin": origin,
                 },
                 "elements": element_map,
+                "captured_at": time.monotonic(),
             }
 
         return AnnotatedScreenshot(
@@ -832,6 +1066,8 @@ def take_screenshot(
             display_height=display_height,
             actual_width=img_width,
             actual_height=img_height,
+            monitor_index=monitor_index,
+            monitor_origin=origin,
             scaling_info=scaling_info,
             suggested_targets=suggested_targets,
             warnings=warnings or None
@@ -845,6 +1081,8 @@ def take_screenshot(
             display_height=0,
             actual_width=0,
             actual_height=0,
+            monitor_index=monitor_index,
+            monitor_origin=None,
             scaling_info="",
             error=f"Screenshot failed: {str(e)}",
             warnings=warnings or None
@@ -961,8 +1199,8 @@ def _fallback_cv_detection(
             
             element_id += 1
             
-    except Exception:
-        pass
+    except Exception as exc:
+        element_map["_warning"] = f"CV fallback failed: {exc}"
     
     return elements, element_map
 
@@ -996,6 +1234,7 @@ def click_screen(
     element_id: Optional[int] = None,
     button: str = "left",
     clicks: int = 1,
+    monitor_index: Optional[int] = None,
 ) -> MouseClickResult:
     """
     Click at screen location using PERCENTAGE coordinates or element ID.
@@ -1030,6 +1269,141 @@ def click_screen(
             error=_pyautogui_error,
         )
 
+    warnings = _collect_env_warnings()
+
+    cached_elements, cache_meta = _get_cached_elements(pyautogui)
+    cache_warning = None
+    if cache_meta is None and _ELEMENT_CACHE and not cached_elements:
+        cache_warning = "Element cache missing metadata; refresh with take_screenshot(detect_elements=True)."
+
+    try:
+        # Validate button
+        valid_buttons = ["left", "right", "middle"]
+        if button not in valid_buttons:
+            return MouseClickResult(
+                success=False,
+                x=0,
+                y=0,
+                button=button,
+                clicks=clicks,
+                error=f"Invalid button. Must be one of: {valid_buttons}",
+            )
+
+        # Get screen dimensions
+        screen_width, screen_height = pyautogui.size()
+        monitor_bounds, monitor_warning = _get_monitor_geometry(monitor_index, pyautogui_module=pyautogui)
+        if monitor_warning:
+            warnings.append(monitor_warning)
+
+        x = 0
+        y = 0
+        action_warning = None
+
+        # Determine click coordinates (logical)
+        if element_id is not None:
+            if not cached_elements:
+                return MouseClickResult(
+                    success=False,
+                    x=0,
+                    y=0,
+                    button=button,
+                    clicks=clicks,
+                    warnings=warnings or None,
+                    error="No element cache available. Run take_screenshot(detect_elements=True) first.",
+                )
+
+            if element_id not in cached_elements:
+                return MouseClickResult(
+                    success=False,
+                    x=0,
+                    y=0,
+                    button=button,
+                    clicks=clicks,
+                    warnings=warnings or None,
+                    error=f"Element {element_id} not found. Valid IDs: {list(cached_elements.keys())}",
+                )
+
+            elem = cached_elements[element_id]
+            x, y = _element_cache_to_xy(
+                elem=elem,
+                screen_width=screen_width,
+                screen_height=screen_height,
+                monitor_bounds=monitor_bounds,
+            )
+            action_success, action_warning = _attempt_atspi_action(elem, clicks=clicks)
+            if action_success:
+                if action_warning:
+                    warnings.append(action_warning)
+                if cache_warning:
+                    warnings.append(cache_warning)
+                return MouseClickResult(
+                    success=True,
+                    x=x,
+                    y=y,
+                    button=button,
+                    clicks=clicks,
+                    applied_scaling=None,
+                    scaling_warning=None,
+                    warnings=warnings or None,
+                )
+
+        elif x_percent is not None and y_percent is not None:
+            # Use percentage coordinates
+            if not (0.0 <= x_percent <= 1.0 and 0.0 <= y_percent <= 1.0):
+                return MouseClickResult(
+                    success=False,
+                    x=0,
+                    y=0,
+                    button=button,
+                    clicks=clicks,
+                    error="Percentage coordinates must be between 0.0 and 1.0",
+                )
+
+            if monitor_bounds:
+                x = int(monitor_bounds["left"] + monitor_bounds["width"] * x_percent)
+                y = int(monitor_bounds["top"] + monitor_bounds["height"] * y_percent)
+            else:
+                x = int(screen_width * x_percent)
+                y = int(screen_height * y_percent)
+        else:
+            return MouseClickResult(
+                success=False,
+                x=0,
+                y=0,
+                button=button,
+                clicks=clicks,
+                error="Must provide either element_id or both x_percent and y_percent",
+            )
+
+        # Perform click via coordinates
+        pyautogui.click(x=x, y=y, clicks=clicks, button=button)
+
+        if action_warning:
+            warnings.append(action_warning)
+        if cache_warning:
+            warnings.append(cache_warning)
+
+        return MouseClickResult(
+            success=True,
+            x=x,
+            y=y,
+            button=button,
+            clicks=clicks,
+            applied_scaling=None,
+            scaling_warning=None,
+            warnings=warnings or None,
+        )
+
+    except Exception as e:
+        return MouseClickResult(
+            success=False,
+            x=0,
+            y=0,
+            button=button,
+            clicks=clicks,
+            error=f"Click failed: {str(e)}",
+            warnings=warnings or None,
+        )
 
 @mcp.tool()
 def click_first_match(
@@ -1138,112 +1512,6 @@ def click_first_match(
             result.warnings = warnings
     return result
 
-    warnings = _collect_env_warnings()
-
-    cached_elements, cache_meta = _get_cached_elements(pyautogui)
-    cache_warning = None
-    if cache_meta is None and getattr(click_screen, "_element_cache", None) and not cached_elements:
-        cache_warning = "Element cache missing metadata; refresh with take_screenshot(detect_elements=True)."
-
-    try:
-        # Validate button
-        valid_buttons = ["left", "right", "middle"]
-        if button not in valid_buttons:
-            return MouseClickResult(
-                success=False,
-                x=0,
-                y=0,
-                button=button,
-                clicks=clicks,
-                error=f"Invalid button. Must be one of: {valid_buttons}"
-            )
-
-        # Get screen dimensions
-        screen_width, screen_height = pyautogui.size()
-        
-        # Determine click coordinates (logical)
-        if element_id is not None:
-            if not cached_elements:
-                return MouseClickResult(
-                    success=False,
-                    x=0,
-                    y=0,
-                    button=button,
-                    clicks=clicks,
-                    warnings=warnings or None,
-                    error="No element cache available. Run take_screenshot(detect_elements=True) first.",
-                )
-
-            if element_id not in cached_elements:
-                return MouseClickResult(
-                    success=False,
-                    x=0,
-                    y=0,
-                    button=button,
-                    clicks=clicks,
-                    warnings=warnings or None,
-                    error=f"Element {element_id} not found. Valid IDs: {list(cached_elements.keys())}",
-                )
-
-            elem = cached_elements[element_id]
-            x, y = _element_cache_to_xy(elem=elem, screen_width=screen_width, screen_height=screen_height)
-            
-        elif x_percent is not None and y_percent is not None:
-            # Use percentage coordinates
-            if not (0.0 <= x_percent <= 1.0 and 0.0 <= y_percent <= 1.0):
-                return MouseClickResult(
-                    success=False,
-                    x=0,
-                    y=0,
-                    button=button,
-                    clicks=clicks,
-                    error="Percentage coordinates must be between 0.0 and 1.0"
-                )
-            
-            x = int(screen_width * x_percent)
-            y = int(screen_height * y_percent)
-        else:
-            return MouseClickResult(
-                success=False,
-                x=0,
-                y=0,
-                button=button,
-                clicks=clicks,
-                error="Must provide either element_id or both x_percent and y_percent"
-            )
-        
-        # Perform click
-        pyautogui.click(x=x, y=y, clicks=clicks, button=button)
-
-        if cache_warning:
-            warnings = (warnings or []) + [cache_warning]
-
-        return MouseClickResult(
-            success=True,
-            x=x,
-            y=y,
-            button=button,
-            clicks=clicks,
-            applied_scaling=None,
-            scaling_warning=None,
-            warnings=warnings or None,
-        )
-
-    except Exception as e:
-        return MouseClickResult(
-            success=False,
-            x=0,
-            y=0,
-            button=button,
-            clicks=clicks,
-            error=f"Click failed: {str(e)}",
-            warnings=warnings or None,
-        )
-
-
-# Initialize element cache on the function
-click_screen._element_cache = {}
-
 
 @mcp.tool()
 def get_screen_info() -> ScreenInfo:
@@ -1282,6 +1550,9 @@ def get_screen_info() -> ScreenInfo:
         scaling_factor, scaling_warning = _detect_scaling_factor(pyautogui)
         if scaling_warning:
             warnings.append(scaling_warning)
+        monitors, monitor_warning = _get_mss_monitors()
+        if monitor_warning:
+            warnings.append(monitor_warning)
 
         result = ScreenInfo(
             success=True,
@@ -1289,6 +1560,7 @@ def get_screen_info() -> ScreenInfo:
             height=screen_height,
             display_server=_safe_display_server(),
             scaling_factor=scaling_factor,
+            monitors=monitors,
             warnings=warnings or None,
         )
         _SCREEN_INFO_CACHE = (time.monotonic(), result)
@@ -1307,7 +1579,8 @@ def move_mouse(
     x_percent: Optional[float] = None,
     y_percent: Optional[float] = None,
     element_id: Optional[int] = None,
-    duration: float = 0.0
+    duration: float = 0.0,
+    monitor_index: Optional[int] = None,
 ) -> MouseClickResult:
     """
     Move mouse cursor to specified screen coordinates without clicking.
@@ -1342,7 +1615,7 @@ def move_mouse(
 
     cached_elements, cache_meta = _get_cached_elements(pyautogui)
     cache_warning = None
-    if cache_meta is None and getattr(click_screen, "_element_cache", None) and not cached_elements:
+    if cache_meta is None and _ELEMENT_CACHE and not cached_elements:
         cache_warning = "Element cache missing metadata; refresh with take_screenshot(detect_elements=True)."
 
     x = 0
@@ -1350,6 +1623,9 @@ def move_mouse(
 
     try:
         screen_width, screen_height = pyautogui.size()
+        monitor_bounds, monitor_warning = _get_monitor_geometry(monitor_index, pyautogui_module=pyautogui)
+        if monitor_warning:
+            warnings.append(monitor_warning)
         
         # Determine coordinates
         if element_id is not None:
@@ -1374,7 +1650,12 @@ def move_mouse(
                 )
 
             elem = cached_elements[element_id]
-            x, y = _element_cache_to_xy(elem=elem, screen_width=screen_width, screen_height=screen_height)
+            x, y = _element_cache_to_xy(
+                elem=elem,
+                screen_width=screen_width,
+                screen_height=screen_height,
+                monitor_bounds=monitor_bounds,
+            )
             
         elif x_percent is not None and y_percent is not None:
             if not (0.0 <= x_percent <= 1.0 and 0.0 <= y_percent <= 1.0):
@@ -1387,8 +1668,12 @@ def move_mouse(
                     error="Percentage coordinates must be between 0.0 and 1.0"
                 )
             
-            x = int(screen_width * x_percent)
-            y = int(screen_height * y_percent)
+            if monitor_bounds:
+                x = int(monitor_bounds["left"] + monitor_bounds["width"] * x_percent)
+                y = int(monitor_bounds["top"] + monitor_bounds["height"] * y_percent)
+            else:
+                x = int(screen_width * x_percent)
+                y = int(screen_height * y_percent)
         else:
             return MouseClickResult(
                 success=False,
@@ -1441,8 +1726,8 @@ def drag_mouse(
     Useful for selecting text, moving windows, or drag-and-drop operations.
 
     Args:
-        x: Target X coordinate in pixels
-        y: Target Y coordinate in pixels
+        x: Target X coordinate in logical pixels
+        y: Target Y coordinate in logical pixels
         button: Mouse button to hold down (default "left")
         duration: Time in seconds to perform the drag (default 0.5)
 
@@ -1701,13 +1986,26 @@ def execute_workflow(
     try:
         for i, action_dict in enumerate(actions):
             action_type = action_dict.get("action", "").lower()
-            
+            monitor_index = action_dict.get("monitor_index")
+
             try:
+                # Validate action shape
+                try:
+                    WorkflowAction(**action_dict)
+                except Exception as exc:
+                    results.append({
+                        "action": action_type or "unknown",
+                        "success": False,
+                        "error": f"Invalid action payload: {exc}",
+                    })
+                    break
+
                 if action_type == "screenshot":
                     # Take screenshot with element detection
                     result = take_screenshot(
                         detect_elements=action_dict.get("detect_elements", True),
-                        output_dir=action_dict.get("output_dir")
+                        output_dir=action_dict.get("output_dir"),
+                        monitor_index=monitor_index,
                     )
                     results.append({
                         "action": "screenshot",
@@ -1723,7 +2021,8 @@ def execute_workflow(
                         y_percent=action_dict.get("y_percent"),
                         element_id=action_dict.get("element_id"),
                         button=action_dict.get("button", "left"),
-                        clicks=action_dict.get("clicks", 1)
+                        clicks=action_dict.get("clicks", 1),
+                        monitor_index=monitor_index,
                     )
                     results.append({
                         "action": "click",
@@ -1738,7 +2037,8 @@ def execute_workflow(
                         x_percent=action_dict.get("x_percent"),
                         y_percent=action_dict.get("y_percent"),
                         element_id=action_dict.get("element_id"),
-                        duration=action_dict.get("duration", 0.0)
+                        duration=action_dict.get("duration", 0.0),
+                        monitor_index=monitor_index,
                     )
                     results.append({
                         "action": "move",
@@ -1857,7 +2157,7 @@ def get_display_diagnostics() -> DiagnosticInfo:
         logical_width, logical_height = pyautogui.size()
 
         # Take test screenshot to get actual dimensions (fastest backend)
-        screenshot, actual_width, actual_height, backend_warning = _get_screenshot_with_backend(pyautogui)
+        screenshot, actual_width, actual_height, backend_warning, _ = _get_screenshot_with_backend(pyautogui)
         if backend_warning:
             warnings.append(backend_warning)
 
@@ -1939,7 +2239,7 @@ def convert_screenshot_coordinates(
 
     try:
         logical_w, logical_h = pyautogui.size()
-        screenshot_img, actual_w, actual_h, backend_warning = _get_screenshot_with_backend(pyautogui)
+        screenshot_img, actual_w, actual_h, backend_warning, _ = _get_screenshot_with_backend(pyautogui)
         if backend_warning:
             warnings.append(backend_warning)
         # Avoid unused variable warning
@@ -2013,6 +2313,7 @@ def map_GUI_elements_location(
 
     captured_path: Optional[str] = None
     scaling_factor = 1.0
+    coordinate_space = "physical"
 
     try:
         import cv2
@@ -2058,6 +2359,7 @@ def map_GUI_elements_location(
                 )
                 if scaling_warning:
                     warnings.append(scaling_warning)
+                coordinate_space = "logical"
         else:
             if pyautogui is None:
                 return GUIElementMapResult(
@@ -2068,7 +2370,7 @@ def map_GUI_elements_location(
                 )
             
             # Take new screenshot
-            pil_image, actual_w, actual_h, backend_warning = _get_screenshot_with_backend(pyautogui)
+            pil_image, actual_w, actual_h, backend_warning, _ = _get_screenshot_with_backend(pyautogui)
             if backend_warning:
                 warnings.append(backend_warning)
 
@@ -2093,6 +2395,7 @@ def map_GUI_elements_location(
             )
             if scaling_warning:
                 warnings.append(scaling_warning)
+            coordinate_space = "logical"
 
         # 2. Process Image (Edge Detection)
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -2126,6 +2429,11 @@ def map_GUI_elements_location(
             if max_area and area > max_area:
                 continue
                 
+            if coordinate_space == "logical" and scaling_factor not in (None, 0, 1.0):
+                x = int(x / scaling_factor)
+                y = int(y / scaling_factor)
+                w = max(1, int(w / scaling_factor))
+                h = max(1, int(h / scaling_factor))
             # Calculate center
             center_x = x + w // 2
             center_y = y + h // 2
@@ -2166,6 +2474,7 @@ def map_GUI_elements_location(
             debug_image_path=saved_debug_path,
             screenshot_path=captured_path,
             scaling_factor=scaling_factor,
+            coordinates=coordinate_space,
             warnings=warnings or None
         )
 
@@ -2176,6 +2485,7 @@ def map_GUI_elements_location(
             count=0,
             error=f"Detection failed: {str(e)}",
             screenshot_path=captured_path,
+            coordinates=coordinate_space,
             warnings=warnings or None
         )
 
@@ -2414,7 +2724,7 @@ def list_prompt_templates() -> PromptTemplatesResult:
     return PromptTemplatesResult(templates=templates)
 
 
-# @mcp.tool()
+@mcp.tool()
 def render_prompt_baseline_display_check(
     task_hint: Optional[str] = None,
 ) -> PromptTemplateResult:
@@ -2428,7 +2738,7 @@ def render_prompt_baseline_display_check(
     )
 
 
-# @mcp.tool()
+@mcp.tool()
 def render_prompt_capture_full_desktop(
     goal: str,
     output_path: Optional[str] = None,
@@ -2443,7 +2753,7 @@ def render_prompt_capture_full_desktop(
     )
 
 
-# @mcp.tool()
+@mcp.tool()
 def render_prompt_capture_region_for_task(
     region: str,
     goal: Optional[str] = None,
@@ -2463,7 +2773,7 @@ def render_prompt_capture_region_for_task(
     )
 
 
-# @mcp.tool()
+@mcp.tool()
 def render_prompt_convert_screenshot_coordinates(
     screenshot_x: int,
     screenshot_y: int,
@@ -2483,7 +2793,7 @@ def render_prompt_convert_screenshot_coordinates(
     )
 
 
-# @mcp.tool()
+@mcp.tool()
 def render_prompt_safe_click(
     x: int,
     y: int,
@@ -2509,7 +2819,7 @@ def render_prompt_safe_click(
     )
 
 
-# @mcp.tool()
+@mcp.tool()
 def render_prompt_hover_and_capture(
     x: int,
     y: int,
@@ -2533,7 +2843,7 @@ def render_prompt_hover_and_capture(
     )
 
 
-# @mcp.tool()
+@mcp.tool()
 def render_prompt_coordinate_mismatch_recovery(
     target_description: str,
     last_click_x: Optional[int] = None,
@@ -2555,7 +2865,7 @@ def render_prompt_coordinate_mismatch_recovery(
     )
 
 
-# @mcp.tool()
+@mcp.tool()
 def render_prompt_end_to_end_capture_and_act(
     goal: str,
     target_hint: Optional[str] = None,

@@ -1,0 +1,31 @@
+{
+  "name": "end_to_end_capture_and_act",
+  "title": "End-to-end capture and action",
+  "description": "Plan a safe workflow: inspect, pick coordinates, click, and verify the result.",
+  "arguments": [
+    {
+      "name": "goal",
+      "description": "Goal for the workflow",
+      "required": true
+    },
+    {
+      "name": "target_hint",
+      "description": "Hint for the target control",
+      "required": false
+    },
+    {
+      "name": "output_dir",
+      "description": "Optional output directory for captures",
+      "required": false
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": {
+        "type": "text",
+        "text": "Goal: {{goal}}. 1) Capture context with `take_screenshot(detect_elements=True)` (use output_dir={{output_dir}} if provided). 2) Identify the control described by {{target_hint}}, selecting precise percentage coordinates (use `convert_screenshot_coordinates` if starting from screenshot pixels). 3) Provide the exact `click_screen` call (prefer element_id or percentage coordinates) and flag any risks. 4) Recommend a quick verification capture after the action."
+      }
+    }
+  ]
+}

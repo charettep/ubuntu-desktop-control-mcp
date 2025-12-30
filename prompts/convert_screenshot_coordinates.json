@@ -1,0 +1,31 @@
+{
+  "name": "convert_screenshot_coordinates",
+  "title": "Convert screenshot pixels to logical click coords",
+  "description": "Turn coordinates measured on a screenshot into logical positions for click_screen.",
+  "arguments": [
+    {
+      "name": "screenshot_x",
+      "description": "X coordinate on screenshot",
+      "required": true
+    },
+    {
+      "name": "screenshot_y",
+      "description": "Y coordinate on screenshot",
+      "required": true
+    },
+    {
+      "name": "note",
+      "description": "Optional note about the target",
+      "required": false
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": {
+        "type": "text",
+        "text": "You measured a screenshot coordinate at ({{screenshot_x}}, {{screenshot_y}}) for {{note}}. Call `convert_screenshot_coordinates` and return logical_x/logical_y, scaling_factor, and warnings. Provide the exact `click_screen` call to run next (use x_percent/y_percent derived from logical coords if you want resolution independence)."
+      }
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "name": "coordinate_mismatch_recovery",
+  "title": "Recover from coordinate mismatch",
+  "description": "Diagnose why a click landed wrong and propose corrected coordinates.",
+  "arguments": [
+    {
+      "name": "target_description",
+      "description": "Description of the intended target",
+      "required": true
+    },
+    {
+      "name": "last_click_x",
+      "description": "Last click X coordinate",
+      "required": false
+    },
+    {
+      "name": "last_click_y",
+      "description": "Last click Y coordinate",
+      "required": false
+    },
+    {
+      "name": "observed_offset",
+      "description": "Observed offset description",
+      "required": false
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": {
+        "type": "text",
+        "text": "You attempted to click {{target_description}} at ({{last_click_x}}, {{last_click_y}}) and it missed (offset: {{observed_offset}}). Run `get_display_diagnostics` to confirm scaling, then call `take_screenshot(detect_elements=True)` and work with element IDs or x_percent/y_percent. If the intended spot is visible, propose corrected percentage coords and the exact `click_screen` call. Keep safety first and suggest reconfirming with a quick screenshot after the next attempt."
+      }
+    }
+  ]
+}

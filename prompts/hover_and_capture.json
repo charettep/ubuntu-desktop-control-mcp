@@ -1,0 +1,41 @@
+{
+  "name": "hover_and_capture",
+  "title": "Hover to reveal UI then capture",
+  "description": "Move the mouse to a target location to reveal hover state, then capture evidence.",
+  "arguments": [
+    {
+      "name": "x",
+      "description": "Target X coordinate",
+      "required": true
+    },
+    {
+      "name": "y",
+      "description": "Target Y coordinate",
+      "required": true
+    },
+    {
+      "name": "duration",
+      "description": "Hover duration in seconds",
+      "required": false
+    },
+    {
+      "name": "goal",
+      "description": "Goal for the hover",
+      "required": false
+    },
+    {
+      "name": "output_path",
+      "description": "Optional output directory for captures",
+      "required": false
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": {
+        "type": "text",
+        "text": "Goal: {{goal}}. Move the cursor with `move_mouse` to ({{x}}, {{y}}) using duration={{duration}}. Avoid clicking. After the hover settles, call `take_screenshot` (use output_dir={{output_path}} if provided) so the hover state is captured. Return the screenshot path, any warnings, and a brief note on whether the target UI reacted."
+      }
+    }
+  ]
+}

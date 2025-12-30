@@ -1,0 +1,46 @@
+{
+  "name": "safe_click",
+  "title": "Safely perform a click",
+  "description": "Perform a guarded click with scaling awareness and post-click confirmation guidance.",
+  "arguments": [
+    {
+      "name": "x",
+      "description": "Target X coordinate",
+      "required": true
+    },
+    {
+      "name": "y",
+      "description": "Target Y coordinate",
+      "required": true
+    },
+    {
+      "name": "coordinate_source",
+      "description": "Coordinate source (e.g., screenshot or logical)",
+      "required": true
+    },
+    {
+      "name": "button",
+      "description": "Mouse button",
+      "required": false
+    },
+    {
+      "name": "clicks",
+      "description": "Number of clicks",
+      "required": false
+    },
+    {
+      "name": "reason",
+      "description": "Reason for the click",
+      "required": false
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": {
+        "type": "text",
+        "text": "Reason: {{reason}}. Prepare to click at ({{x}}, {{y}}) using button={{button}} and clicks={{clicks}}. If coordinate_source is 'screenshot', first convert with `convert_screenshot_coordinates` to get logical_x/logical_y. Call `click_screen` accordingly and return success and any warnings. Suggest taking a follow-up screenshot if verification is needed."
+      }
+    }
+  ]
+}

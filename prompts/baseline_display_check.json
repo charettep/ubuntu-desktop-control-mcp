@@ -1,0 +1,21 @@
+{
+  "name": "baseline_display_check",
+  "title": "Baseline display and scaling check",
+  "description": "Collect display server, sizing, and scaling warnings before interacting with the desktop.",
+  "arguments": [
+    {
+      "name": "task_hint",
+      "description": "Optional task context",
+      "required": false
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": {
+        "type": "text",
+        "text": "Before working on {{task_hint}}, call `get_screen_info` and `get_display_diagnostics`. Report display_server, logical size (width/height), scaling_factor, and any warnings. Prefer clicking by element ID from `take_screenshot` or by percentage with `click_screen(x_percent=..., y_percent=...)`."
+      }
+    }
+  ]
+}

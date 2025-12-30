@@ -23,7 +23,7 @@ take_screenshot() → analyze → grid overlay → zoom quadrant → find pixel 
 take_screenshot() → "I see Pinta is element #5" → click_screen(element_id=5) → ✓
 ```
 
-See [OPTIMIZATION_COMPLETE.md](OPTIMIZATION_COMPLETE.md) for full details.
+See `README.md` for full details.
 
 ## Features
 
@@ -55,8 +55,8 @@ git clone https://github.com/charettep/ubuntu-desktop-control-mcp.git
 cd ubuntu-desktop-control-mcp
 
 # Install system dependencies (requires sudo)
-chmod +x install_system_deps.sh
-./install_system_deps.sh
+chmod +x scripts/install.sh
+./scripts/install.sh
 
 # Install Python dependencies
 pip install -e .
@@ -137,20 +137,19 @@ args = []
 ### Core Capabilities
 | Tool | Description |
 |------|-------------|
-| `take_screenshot` | Capture the desktop or a specific region to a file. |
-| `click_screen` | Click at specific coordinates. Supports auto-scaling for HiDPI displays. |
-| `move_mouse` | Move the cursor to coordinates without clicking. |
+| `take_screenshot` | Capture the desktop (optionally per-monitor) with annotated elements. |
+| `click_screen` | Click by element ID or percentage coordinates (supports per-monitor). |
+| `move_mouse` | Move the cursor by element ID or percentage coordinates (supports per-monitor). |
 | `drag_mouse` | Drag the cursor to coordinates while holding a mouse button. |
 | `type_text` | Type text using the keyboard. |
 | `press_key` | Press a specific key (e.g., 'enter', 'esc'). |
 | `press_hotkey` | Press a combination of keys simultaneously (e.g., Ctrl+Shift+C). |
 | `get_screen_info` | Get screen dimensions and display server type (X11/Wayland). |
 | `get_display_diagnostics` | Troubleshoot scaling and coordinate mismatches. |
-| `screenshot_with_grid` | Capture screen with a coordinate grid overlay for precise positioning. |
-| `screenshot_quadrants` | Split screen into 4 quadrants for easier analysis of high-res displays. |
 | `map_GUI_elements_location` | Detect and map UI elements (hitboxes) using Computer Vision. |
 | `convert_screenshot_coordinates` | Convert pixels from a screenshot to logical click coordinates. |
 | `list_prompt_templates` | List available prompt templates (for clients without native prompt support). |
+| `execute_workflow` | Execute a batch of actions (screenshot/click/move/type/wait). |
 
 ### Prompt Rendering Tools
 These tools allow clients without native prompt support (like Codex CLI) to render prompt templates as text.
@@ -160,8 +159,6 @@ These tools allow clients without native prompt support (like Codex CLI) to rend
 | `render_prompt_baseline_display_check` | Render the baseline display check prompt. |
 | `render_prompt_capture_full_desktop` | Render the full desktop capture prompt. |
 | `render_prompt_capture_region_for_task` | Render the region capture prompt. |
-| `render_prompt_grid_overlay_snapshot` | Render the grid overlay prompt. |
-| `render_prompt_quadrant_scan` | Render the quadrant scan prompt. |
 | `render_prompt_convert_screenshot_coordinates` | Render the coordinate conversion prompt. |
 | `render_prompt_safe_click` | Render the safe click prompt. |
 | `render_prompt_hover_and_capture` | Render the hover and capture prompt. |
@@ -175,8 +172,6 @@ These tools allow clients without native prompt support (like Codex CLI) to rend
 | `baseline_display_check` | Check display settings and scaling before starting tasks. |
 | `capture_full_desktop` | Capture and summarize the full desktop state. |
 | `capture_region_for_task` | Capture a specific region for detailed inspection. |
-| `grid_overlay_snapshot` | Capture with grid to identify precise coordinates. |
-| `quadrant_scan` | Analyze high-res screens using quadrants. |
 | `safe_click` | Perform a click with safety checks and scaling awareness. |
 | `hover_and_capture` | Hover to reveal UI elements, then capture. |
 | `coordinate_mismatch_recovery` | Diagnose and fix missed clicks. |
@@ -193,6 +188,7 @@ The server relies on standard Linux/X11 environment variables to locate and inte
 | `DISPLAY` | X11 display identifier. Required for the server to know *which* screen to control. | `:0` |
 | `XDG_SESSION_TYPE` | Used to detect if running on X11 or Wayland. | `unknown` |
 | `XAUTHORITY` | Path to X11 authority file. Required if running from a different user context (e.g., sudo, docker) or over SSH. | `~/.Xauthority` |
+| `UDC_FORCE_COORDS` | Force coordinate clicks (disable AT-SPI action clicks). | unset |
 
 ### Passing Environment Variables
 
@@ -236,7 +232,7 @@ If clicks land in the wrong place, you likely have a HiDPI display scaling misma
 **Solutions:**
 1. **Auto-scale**: Use `click_screen(..., auto_scale=True)` to let the server handle it.
 2. **Diagnostics**: Run `get_display_diagnostics()` to see the scaling factor.
-3. **Grid**: Use `screenshot_with_grid()` to see the *logical* coordinates you should use.
+3. **Element IDs**: Use `take_screenshot(detect_elements=True)` and click via `element_id` or percentage coordinates.
 
 ## Troubleshooting
 

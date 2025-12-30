@@ -1,0 +1,31 @@
+{
+  "name": "capture_region_for_task",
+  "title": "Capture region screenshot",
+  "description": "Grab a focused region screenshot to inspect a specific UI area.",
+  "arguments": [
+    {
+      "name": "region",
+      "description": "Region description",
+      "required": true
+    },
+    {
+      "name": "goal",
+      "description": "Optional goal for the capture",
+      "required": false
+    },
+    {
+      "name": "output_path",
+      "description": "Optional output directory for captures",
+      "required": false
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": {
+        "type": "text",
+        "text": "Goal: {{goal}}. Call `take_screenshot(detect_elements=True)` (use output_dir={{output_path}} if provided). Focus your analysis on region '{{region}}' (descriptive guidance; `take_screenshot` currently captures the full screen). Return screenshot_path, any warnings, and a short summary of what is visible in that region."
+      }
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "name": "capture_full_desktop",
+  "title": "Capture full desktop screenshot",
+  "description": "Capture a full-screen screenshot and summarize what is visible before acting.",
+  "arguments": [
+    {
+      "name": "goal",
+      "description": "Goal for the capture",
+      "required": true
+    },
+    {
+      "name": "output_path",
+      "description": "Optional output directory for captures",
+      "required": false
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": {
+        "type": "text",
+        "text": "Goal: {{goal}}. Call `take_screenshot(detect_elements=True)` (use output_dir={{output_path}} if provided). Return screenshot_path, original_path, display_width/height, actual_width/height, and any warnings. List 2-3 concise observations relevant to the goal and suggest a next step (click by element_id or click by percentage)."
+      }
+    }
+  ]
+}
