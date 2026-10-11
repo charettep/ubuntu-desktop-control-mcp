@@ -11,9 +11,11 @@ Requirements:
 - System packages: python3-xlib, scrot
 """
 
+import atexit
 import os
 import shutil
 import textwrap
+import threading
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -445,12 +447,133 @@ def _detect_scaling_factor(
         return 1.0, f"Scaling detection failed; assuming 1.0x: {exc}"
 
 
+class _PortalInput:
+    """Wayland input via a long-lived helper (xdg-desktop-portal RemoteDesktop), mimicking the pyautogui calls used here."""
+
+    _proc = None
+    _lock = threading.Lock()
+
+    @classmethod
+    def _ensure(cls):
+        import json
+        import select
+        import subprocess
+
+        if cls._proc is not None and cls._proc.poll() is None:
+            return
+        helper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_portal_input.py")
+        cls._proc = subprocess.Popen(
+            ["/usr/bin/python3", "-W", "ignore", helper],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        )
+        atexit.register(lambda: cls._proc and cls._proc.poll() is None and cls._proc.terminate())
+        # First run may show a GNOME permission dialog; allow time to approve.
+        ready, _, _ = select.select([cls._proc.stdout], [], [], 120)
+        line = cls._proc.stdout.readline() if ready else ""
+        info = json.loads(line) if line.strip() else {"ready": False, "error": "helper timed out or exited"}
+        if not info.get("ready"):
+            cls._proc.kill()
+            cls._proc = None
+            raise RuntimeError(f"Wayland input portal unavailable: {info.get('error')}")
+
+    @classmethod
+    def _send(cls, **cmd):
+        import json
+        import select
+
+        with cls._lock:
+            cls._ensure()
+            cls._proc.stdin.write(json.dumps(cmd) + "\n")
+            cls._proc.stdin.flush()
+            ready, _, _ = select.select([cls._proc.stdout], [], [], 60)
+            line = cls._proc.stdout.readline() if ready else ""
+            if not line.strip():
+                cls._proc.kill()
+                cls._proc = None
+                raise RuntimeError("Wayland input helper stopped responding")
+            reply = json.loads(line)
+        if not reply.get("ok"):
+            raise RuntimeError(reply.get("error", "input helper error"))
+
+    def click(self, x=None, y=None, clicks=1, button="left"):
+        self._send(op="click", x=x, y=y, clicks=clicks, button=button)
+
+    def moveTo(self, x, y, duration=0.0):
+        self._send(op="goto", x=x, y=y, duration=duration)
+
+    def dragTo(self, x, y, duration=0.5, button="left"):
+        self._send(op="drag", x=x, y=y, duration=duration, button=button)
+
+    def write(self, text, interval=0.0):
+        self._send(op="type", text=text, interval=interval)
+
+    def press(self, key):
+        self._send(op="key", key=key)
+
+    def hotkey(self, *keys):
+        self._send(op="hotkey", keys=list(keys))
+
+
+_PORTAL_INPUT = _PortalInput()
+
+
+def _input_backend(pyautogui_module):
+    """Input driver: the portal on Wayland (pyautogui/XTest only reaches X11 apps there), else pyautogui."""
+    if _safe_display_server() == "wayland" and os.environ.get("UDC_INPUT_BACKEND") != "pyautogui":
+        return _PORTAL_INPUT
+    return pyautogui_module
+
+
+def _portal_screenshot(monitor_index: Optional[int] = None):
+    """Capture via xdg-desktop-portal (Wayland). Returns (PIL image, origin dict)."""
+    import subprocess
+    from PIL import Image
+
+    helper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_portal_screenshot.py")
+    proc = subprocess.run(
+        ["/usr/bin/python3", helper], capture_output=True, text=True, timeout=60, check=False
+    )
+    path = proc.stdout.strip()
+    if proc.returncode != 0 or not path:
+        raise RuntimeError(proc.stderr.strip() or "portal returned no file")
+    try:
+        with Image.open(path) as opened:
+            img = opened.convert("RGB")
+    finally:
+        try:
+            os.remove(path)  # portal drops files in ~/Pictures; don't leave clutter
+        except OSError:
+            pass
+    origin = {"left": 0, "top": 0}
+    if monitor_index is not None:
+        monitors, _ = _get_mss_monitors()
+        idx = monitor_index + 1
+        if not monitors or idx >= len(monitors):
+            raise RuntimeError(f"Monitor index {monitor_index} out of range")
+        m = monitors[idx]
+        origin = {"left": m["left"], "top": m["top"]}
+        img = img.crop((m["left"], m["top"], m["left"] + m["width"], m["top"] + m["height"]))
+    return img, origin
+
+
 def _get_screenshot_with_backend(pyautogui_module, monitor_index: Optional[int] = None):
     """
     Capture a screenshot using mss if available (faster), else fall back to PyAutoGUI.
 
     Returns (image, width, height, warning, origin)
     """
+    if _safe_display_server() == "wayland":
+        # mss/pyautogui only see black frames on Wayland; use the desktop portal.
+        try:
+            img, origin = _portal_screenshot(monitor_index)
+            return img, img.width, img.height, None, origin
+        except Exception as exc:  # noqa: BLE001
+            portal_warning = f"portal screenshot failed, falling back to mss: {exc}"
+        else:
+            portal_warning = None
+    else:
+        portal_warning = None
+
     try:
         import mss  # type: ignore
         from PIL import Image
@@ -474,7 +597,7 @@ def _get_screenshot_with_backend(pyautogui_module, monitor_index: Optional[int] 
 
     image = pyautogui_module.screenshot()
     width, height = image.size
-    return image, width, height, warning, {"left": 0, "top": 0}
+    return image, width, height, warning or portal_warning, {"left": 0, "top": 0}
 
 
 class ScreenshotResult(BaseModel):
@@ -518,7 +641,7 @@ class ScreenInfo(BaseModel):
     height: Optional[int] = Field(None, description="Screen height in pixels")
     display_server: str = Field(description="Display server type (X11 or Wayland)")
     scaling_factor: Optional[float] = Field(None, description="Detected display scaling factor (1.0 = no scaling)")
-    monitors: Optional[List[Dict[str, int]]] = Field(None, description="Monitor list from mss (index 0 is virtual screen)")
+    monitors: Optional[List[Dict[str, Any]]] = Field(None, description="Monitor list from mss (index 0 is virtual screen)")
     warnings: Optional[List[str]] = Field(None, description="Non-fatal warnings about environment or scaling")
     error: Optional[str] = Field(None, description="Error message if operation failed")
 
@@ -948,7 +1071,6 @@ def take_screenshot(
 
                 # AT-SPI can race during app startup; retry once if empty.
                 if not elements:
-                    import time
 
                     time.sleep(0.1)
                     element_id = 1
@@ -1376,7 +1498,7 @@ def click_screen(
             )
 
         # Perform click via coordinates
-        pyautogui.click(x=x, y=y, clicks=clicks, button=button)
+        _input_backend(pyautogui).click(x=x, y=y, clicks=clicks, button=button)
 
         if action_warning:
             warnings.append(action_warning)
@@ -1685,7 +1807,7 @@ def move_mouse(
             )
 
         # Move mouse
-        pyautogui.moveTo(x, y, duration=duration)
+        _input_backend(pyautogui).moveTo(x, y, duration=duration)
 
         if cache_warning:
             warnings = (warnings or []) + [cache_warning]
@@ -1748,7 +1870,7 @@ def drag_mouse(
     warnings = _collect_env_warnings()
 
     try:
-        pyautogui.dragTo(x, y, duration=duration, button=button)
+        _input_backend(pyautogui).dragTo(x, y, duration=duration, button=button)
 
         return MouseClickResult(
             success=True,
@@ -1800,7 +1922,7 @@ def type_text(text: str, interval: float = 0.0) -> MouseClickResult:
     warnings = _collect_env_warnings()
 
     try:
-        pyautogui.write(text, interval=interval)
+        _input_backend(pyautogui).write(text, interval=interval)
         return MouseClickResult(
             success=True,
             x=0,
@@ -1854,7 +1976,7 @@ def press_key(key: str) -> MouseClickResult:
     warnings = _collect_env_warnings()
 
     try:
-        pyautogui.press(key)
+        _input_backend(pyautogui).press(key)
         return MouseClickResult(
             success=True,
             x=0,
@@ -1908,7 +2030,7 @@ def press_hotkey(keys: List[str]) -> MouseClickResult:
     warnings = _collect_env_warnings()
 
     try:
-        pyautogui.hotkey(*keys)
+        _input_backend(pyautogui).hotkey(*keys)
         return MouseClickResult(
             success=True,
             x=0,
